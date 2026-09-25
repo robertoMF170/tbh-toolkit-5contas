@@ -1,0 +1,72 @@
+================================================================
+low budget Plague 23-20 under 5mins
+Heroi: Priest (level 101)
+https://tbhindex.com/pt/builds/252
+================================================================
+
+ARVORE DE RUNAS (ordem do autor da build)
+----------------------------------------------------------------
+  1. [ ] Blessing Of Might -> nivel 5
+  2. [ ] Wrath of Heaven -> nivel 5
+  3. [ ] Attack Damage -> nivel 3
+  4. [ ] Max Hp -> nivel 8
+  5. [ ] Armor -> nivel 7
+  6. [ ] Damage Absorption -> nivel 3
+  7. [ ] Max Hp -> nivel 10
+  8. [ ] Cast Speed -> nivel 10
+  9. [ ] Physical Damage Percent -> nivel 10
+ 10. [ ] All Elemental Resistance -> nivel 10
+ 11. [ ] Armor -> nivel 10
+ 12. [ ] Area Of Effect -> nivel 10
+ 13. [ ] Cast Speed -> nivel 10
+ 14. [ ] Lightning -> nivel 5
+ 15. [ ] Flame Hydra -> nivel 5
+ 16. [ ] Meteor Strike -> nivel 5
+ 17. [ ] Attack Damage -> nivel 3
+ 18. [ ] Cooldown Reduction -> nivel 7
+ 19. [ ] Area Of Effect -> nivel 8
+ 20. [ ] Critical Chance -> nivel 3
+ 21. [ ] Fire Damage Percent -> nivel 10
+ 22. [ ] Cooldown Reduction -> nivel 6
+ 23. [ ] Attack Damage -> nivel 10
+ 24. [ ] Cast Speed -> nivel 10
+ 25. [ ] Critical Damage -> nivel 2
+ 26. [ ] All Elemental Resistance -> nivel 7
+ 27. [ ] Area Of Effect -> nivel 10
+ 28. [ ] Critical Chance -> nivel 10
+ 29. [ ] Swift Surge -> nivel 5
+ 30. [ ] Piercing Arrow -> nivel 5
+ 31. [ ] Attack Damage -> nivel 3
+ 32. [ ] Attack Speed -> nivel 8
+ 33. [ ] Critical Chance -> nivel 8
+ 34. [ ] Critical Damage -> nivel 3
+ 35. [ ] Increase Projectile Damage -> nivel 10
+ 36. [ ] Attack Speed -> nivel 10
+ 37. [ ] Elemental Dodge Chance -> nivel 10
+ 38. [ ] Movement Speed -> nivel 10
+ 39. [ ] Hp Leech -> nivel 1
+ 40. [ ] Increase Projectile Damage -> nivel 10
+ 41. [ ] Dodge Chance -> nivel 8
+ 42. [ ] Attack Speed -> nivel 10
+----------------------------------------------------------------
+ RESUMO FINAL: Blessing Of Might 5, Wrath of Heaven 5, Attack Damage 10, Max Hp 10, Armor 10, Damage Absorption 3, Cast Speed 10, Physical Damage Percent 10, All Elemental Resistance 10, Area Of Effect 10, Lightning 5, Flame Hydra 5, Meteor Strike 5, Cooldown Reduction 7, Critical Chance 10, Fire Damage Percent 10, Critical Damage 3, Swift Surge 5, Piercing Arrow 5, Attack Speed 10, Increase Projectile Damage 10, Elemental Dodge Chance 10, Movement Speed 10, Hp Leech 1, Dodge Chance 8
+ Total de niveis de runas a comprar: 187
+
+GEAR
+----------------------------------------------------------------
+  - weapon: Shadow Bow
+  - offhand: Dimensional Arrow
+  - helmet: Fighter's Helmet
+  - armor: Shine Armor
+  - boots: Dimensional Boots
+  - amulet: Ethereal Amulet
+  - earring: Ethereal Earring
+  - ring: Eclipse Ring
+  - bracer: Ethereal Bracer
+
+STAT PRIORITY (rerolls de equipamento)
+----------------------------------------------------------------
+  1. Physical Damage %
+  2. Crit Damage
+  3. Crit Chance
+  4. Attack Damage %
