@@ -29,3 +29,17 @@ baus_cache.json
 .freebuff/
 .DS_Store
 Thumbs.db
+
+# === SrRobs - dados pessoais: nunca commitar ===
+baus.json
+baus_historico.json
+baus_cache.json
+*.es3
+abrir_conta*.bat
+Sandboxie_*.ini
+*.estado.txt
+alertas_dedup.json
+analysis_result.json
+game_manifest.acf
+captura_*.png
+ecra_completo*.png
