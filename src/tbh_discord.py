@@ -24,6 +24,9 @@ MAX_ATTEMPTS = 3
 
 def discord_enabled(enabled_file: str = ENABLED_FILE) -> bool:
     """Read the local opt-in; preserve legacy/manual setup when no choice is saved."""
+    override = os.environ.get("TBH_DISCORD_ENABLED")
+    if override is not None:
+        return override.strip().casefold() in {"1", "true", "yes", "s", "sim", "on"}
     try:
         with open(enabled_file, encoding="utf-8") as fh:
             return fh.read().strip().casefold() not in {"0", "false", "no", "nao", "não", "off"}

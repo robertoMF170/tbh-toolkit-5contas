@@ -761,6 +761,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", type=float, default=2.0, help="intervalo entre verificacoes (segundos)")
     parser.add_argument("--report-interval", type=float, default=900.0, help="intervalo entre resumos do vigia (segundos; predefinicao 15 minutos)")
     parser.add_argument("--discord-check", action="store_true", help="verifica se existe uma configuracao Discord valida sem revelar o webhook")
+    parser.add_argument("--discord-enable", action="store_true", help="ativa as notificacoes Discord se houver um webhook valido")
+    parser.add_argument("--discord-disable", action="store_true", help="desativa as notificacoes Discord locais")
     parser.add_argument("--add", metavar="ITEM", help="adiciona um item aos alertas")
     parser.add_argument("--conta", default="", help="associa o alvo ou verifica esta conta (com --status/--add/--rm)")
     parser.add_argument("--rm", metavar="ITEM", help="remove um item dos alertas")
@@ -771,6 +773,21 @@ def main(argv: list[str] | None = None) -> int:
         running = _watch_process_running()
         print("VIGIA JA EM EXECUCAO." if running else "VIGIA NAO ESTA EM EXECUCAO.", flush=True)
         return 0 if running else 1
+    if args.discord_disable:
+        tbh_discord.set_discord_enabled(False)
+        print("Notificacoes Discord desativadas neste computador.", flush=True)
+        return 0
+    if args.discord_enable:
+        webhook_url, mention_id = tbh_discord.discord_settings()
+        if not tbh_discord.valid_webhook_url(webhook_url):
+            print("Discord nao configurado; cria o webhook antes de o ativar.", flush=True)
+            return 1
+        if mention_id and not tbh_discord.valid_discord_user_id(mention_id):
+            print("ID de mencao invalido; corrige-o antes de ativar o Discord.", flush=True)
+            return 1
+        tbh_discord.set_discord_enabled(True)
+        print("Notificacoes Discord ativadas neste computador.", flush=True)
+        return 0
     if args.discord_check:
         webhook_url, mention_id = tbh_discord.discord_settings()
         if not webhook_url or not tbh_discord.valid_webhook_url(webhook_url):

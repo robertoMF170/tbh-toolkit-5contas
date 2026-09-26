@@ -11,7 +11,7 @@ Guarda tudo em `var/visitas.json` (por IP e por device-id do browser).
 Stdlib only; zero dependencias externas.
 
 Uso:
-  python -X utf8 src/tbh_visitas.py [--port 8765] [--root .] [--db var/visitas.json]
+  python -X utf8 src/tbh_visitas.py [--port 8765] [--host 127.0.0.1] [--root .] [--db var/visitas.json]
 """
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.error
+import urllib.request
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(AQUI)
@@ -168,14 +170,17 @@ def executar_acao_farm(pedido: dict) -> dict:
     action = str(pedido.get("action") or "").strip().lower()
     name = str(pedido.get("name") or "").strip()
     account = str(pedido.get("conta") or "").strip()
-    if action not in {"add", "remove", "ack"}:
+    if action not in {"add", "remove", "ack", "status"}:
         raise ValueError("Acao de farm desconhecida.")
-    if not name or len(name) > 200 or len(account) > 120:
+    if action != "status" and (not name or len(name) > 200 or len(account) > 120):
         raise ValueError("Nome do item ou conta invalido.")
 
     import tbh_farm_alert as farm_alert
 
-    if action == "add":
+    if action == "status":
+        changed = False
+        message = "Estado dos alertas atualizado."
+    elif action == "add":
         changed = farm_alert.add_target(name, account)
         message = ("Alerta registado: " if changed else "Esse alerta ja estava registado: ") + name
     elif action == "remove":
@@ -204,8 +209,11 @@ class VisitasHandler(BaseHTTPRequestHandler):
 
     # -- helpers -----------------------------------------------------------
     def _cors(self):
-        """Headers CORS: o dashboard pode estar aberto como file:// ..."""
-        self.send_header("Access-Control-Allow-Origin", "*")
+        """Allow browser access only from this local dashboard (or file://)."""
+        if self._farm_request_is_local():
+            origin = self.headers.get("Origin", "")
+            self.send_header("Access-Control-Allow-Origin", "null" if origin == "null" else origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
@@ -229,6 +237,15 @@ class VisitasHandler(BaseHTTPRequestHandler):
         alvo = os.path.realpath(os.path.join(base, caminho.lstrip("/\\").replace("\\", "/")))
         if not (alvo == real_base or alvo.startswith(real_base + os.sep)):
             self._json({"erro": "caminho invalido"}, 403)
+            return
+        relative_parts = os.path.relpath(alvo, real_base).replace("\\\\", "/").split("/")
+        if any(
+            part.startswith(".")
+            or part.casefold() in {"config", "var"}
+            or part.casefold().endswith((".env", ".es3"))
+            for part in relative_parts
+        ):
+            self._json({"erro": "ficheiro privado"}, 404)
             return
         if not os.path.isfile(alvo):
             self._json({"erro": "nao encontrado"}, 404)
@@ -259,7 +276,9 @@ class VisitasHandler(BaseHTTPRequestHandler):
     # -- rotas -------------------------------------------------------------
     def do_GET(self):  # noqa: N802
         rota = self.path.split("?", 1)[0]
-        if rota in ("/api/visitas", "/api/visitas/"):
+        if rota == "/api/health":
+            self._json({"ok": True, "farm_api": 1})
+        elif rota in ("/api/visitas", "/api/visitas/"):
             with _LOCK:
                 dados = carregar(_DB_PATH[0])
             self._json(_escrever_stats(dados))
@@ -354,6 +373,8 @@ def main(argv=None) -> int:
                         help="porta HTTP (predefinicao: %d)" % PORTA_BASE)
     parser.add_argument("--host", default="127.0.0.1",
                         help="interface de rede; por defeito so aceita ligacoes deste computador")
+    parser.add_argument("--check-api", action="store_true",
+                        help="confirma se o servidor local TBH compativel esta ativo nesta porta")
     parser.add_argument("--root", default=ROOT,
                         help="pasta raiz com minhas_builds.html")
     parser.add_argument("--db", default=_db_padrao(),
@@ -361,6 +382,17 @@ def main(argv=None) -> int:
     parser.add_argument("--verbose", action="store_true",
                         help="logar pedidos no terminal")
     args = parser.parse_args(argv)
+    if args.check_api:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{args.port}/api/health", timeout=2) as response:
+                health = json.loads(response.read().decode("utf-8"))
+            if response.status == 200 and health.get("farm_api") == 1:
+                print("[visitas] API local TBH pronta.", flush=True)
+                return 0
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+        print("[visitas] Nenhum servidor TBH compativel nesta porta.", flush=True)
+        return 1
 
     httpd = arrancar(args.port, os.path.abspath(args.root),
                      os.path.abspath(args.db), args.verbose, args.host)
