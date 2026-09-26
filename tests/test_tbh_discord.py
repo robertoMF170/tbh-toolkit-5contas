@@ -71,6 +71,15 @@ class TestDiscordFarmAlerts(unittest.TestCase):
             with open(env_file, encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "KEEP_ME=value\n")
 
+    def test_discord_desligado_por_predefinicao_ate_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            enabled_file = os.path.join(tmp, "enabled")
+            self.assertFalse(discord.discord_enabled(enabled_file))
+            discord.set_discord_enabled(True, enabled_file)
+            self.assertTrue(discord.discord_enabled(enabled_file))
+            discord.set_discord_enabled(False, enabled_file)
+            self.assertFalse(discord.discord_enabled(enabled_file))
+
     def test_send_alert_posts_payload_and_never_logs_url(self):
         calls = []
         output = []

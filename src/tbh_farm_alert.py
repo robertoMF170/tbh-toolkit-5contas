@@ -709,11 +709,11 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
                 now = time.monotonic()
                 if now - last_report >= report_interval:
                     good = max(0, len(watched_accounts) - unreadable)
-                    webhook_url, _mention_id = tbh_discord.discord_settings()
-                    discord_on = (
-                        tbh_discord.discord_enabled()
-                        and tbh_discord.valid_webhook_url(webhook_url)
-                    )
+            webhook_url, _mention_id = tbh_discord.discord_settings()
+            discord_on = (
+                tbh_discord.discord_enabled()
+                and tbh_discord.valid_webhook_url(webhook_url)
+            )
                     discord_label = "ativo" if discord_on else "desativado"
                     print(
                         f"[FARM] Continua a vigiar: {len(targets)} alvo(s); "
@@ -745,8 +745,8 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
             fallback_watched = locals().get("watched_accounts", [])
             _write_heartbeat(fallback_targets, fallback_accounts, interval, status="error", error=error, watched_accounts=fallback_watched)
             now = time.monotonic()
-            if error != last_error_signature or now - last_error_report >= report_interval:
-                print(f"[FARM] Erro no ciclo de vigia ({error}). Vou tentar novamente.", flush=True)
+            if error != last_error_signature or now - last_error_report >= report_interval:                    print(f"[FARM] Erro no ciclo de vigia ({error}). Vou tentar novamente.", flush=True)
+
                 last_error_signature = error
                 last_error_report = now
         time.sleep(max(0.1, interval - (time.monotonic() - started)))

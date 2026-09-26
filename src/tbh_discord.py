@@ -30,6 +30,8 @@ def discord_enabled(enabled_file: str = ENABLED_FILE) -> bool:
     try:
         with open(enabled_file, encoding="utf-8") as fh:
             return fh.read().strip().casefold() not in {"0", "false", "no", "nao", "não", "off"}
+    except FileNotFoundError:
+        return False
     except OSError:
         return True
 

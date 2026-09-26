@@ -56,6 +56,47 @@ class TestAlertData(unittest.TestCase):
             test=True,
         )
 
+    def test_prompt_discord_nao_desativa_webhook_guardado(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert.tbh_discord, "discord_settings", return_value=("", "")),
+            mock.patch.object(alert.tbh_discord, "set_discord_enabled") as set_enabled,
+            mock.patch.object(alert, "_ask_yes_no", return_value=False),
+            redirect_stdout(output),
+        ):
+            result = alert.main(["--discord-prompt"])
+        self.assertEqual(result, 0)
+        set_enabled.assert_called_once_with(False)
+        self.assertIn("vigia local continua ativa", output.getvalue())
+
+    def test_prompt_discord_configurado_ativa_sem_enviar_teste(self):
+        webhook = "https://discord.com/api/webhooks/123456789012345678/test-token"
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert.tbh_discord, "discord_settings", return_value=(webhook, "")),
+            mock.patch.object(alert.tbh_discord, "set_discord_enabled") as set_enabled,
+            mock.patch.object(alert.tbh_discord, "send_alert") as send,
+            mock.patch.object(alert, "_ask_yes_no", return_value=True),
+            redirect_stdout(output),
+        ):
+            result = alert.main(["--discord-prompt"])
+        self.assertEqual(result, 0)
+        set_enabled.assert_called_once_with(True)
+        send.assert_not_called()
+
+    def test_prompt_discord_sem_config_permite_seguir_sem_configurar(self):
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert.tbh_discord, "discord_settings", return_value=("", "")),
+            mock.patch.object(alert.tbh_discord, "set_discord_enabled") as set_enabled,
+            mock.patch.object(alert, "_ask_yes_no", side_effect=[True, False]),
+            redirect_stdout(output),
+        ):
+            result = alert.main(["--discord-prompt"])
+        self.assertEqual(result, 0)
+        set_enabled.assert_called_once_with(False)
+        self.assertIn("Queres configurar agora?", output.getvalue())
+
     def test_teste_discord_continua_a_exigir_confirmacao(self):
         webhook = "https://discord.com/api/webhooks/123456789012345678/test-token"
         output = io.StringIO()

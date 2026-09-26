@@ -174,29 +174,30 @@ def executar_acao_farm(pedido: dict) -> dict:
     action = str(pedido.get("action") or "").strip().lower()
     name = str(pedido.get("name") or "").strip()
     account = str(pedido.get("conta") or "").strip()
-    if action not in {"add", "remove", "ack", "status", "add-build"}:
-        raise ValueError("Acao de farm desconhecida.")
-    if action != "status" and (not name or len(name) > 200 or len(account) > 120):
-        raise ValueError("Nome do item ou conta invalido.")
-
     if action == "add-build":
         from urllib.parse import urlsplit
         from tbh_site import normalize_url, resolve_url, load_urls, save_urls
 
-        parsed = urlsplit(normalize_url(name))
+        normalized_url = normalize_url(name)
+        parsed = urlsplit(normalized_url)
         if parsed.scheme != "https" or parsed.netloc.casefold() not in {"tbhindex.com", "www.tbhindex.com"}:
             raise ValueError("O link tem de ser de uma build do tbhindex.com.")
-        build_url = resolve_url(normalize_url(name))
+        build_url = resolve_url(normalized_url)
         if not build_url:
             raise ValueError("Nao encontrei essa build do tbhindex.com.")
         urls = load_urls()
-        if build_url not in urls:
-            urls.append(build_url)
-            save_urls(urls)
-        if not generate_farm_dashboard():
+        if build_url in urls:
+            return {"ok": True, "changed": False, "action": action, "message": "Essa build ja estava adicionada."}
+        urls.append(build_url)
+        save_urls(urls)
+        if not gerar_builds(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
             raise RuntimeError("Nao foi possivel regenerar a dashboard.")
-        return {"ok": True, "changed": build_url not in urls[:-1], "action": action,
+        return {"ok": True, "changed": True, "action": action,
                 "message": "Build adicionada. A dashboard sera atualizada ao voltar a abrir."}
+    if action not in {"add", "remove", "ack", "status"}:
+        raise ValueError("Acao de farm desconhecida.")
+    if action != "status" and (not name or len(name) > 200 or len(account) > 120):
+        raise ValueError("Nome do item ou conta invalido.")
 
     import tbh_farm_alert as farm_alert
 
