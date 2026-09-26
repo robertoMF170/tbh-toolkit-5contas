@@ -80,7 +80,7 @@ def _farm_btn_html(name: str, conta: str = None) -> str:
     # data-conta permite ao JS mandar a conta certa (auto-deteção: se vier da build |user=Conta)
     conta_attr = f' data-conta="{_esc(conta)}"' if conta else ''
     if is_on:
-        return f'<button type="button" class="ffarmbtn on" data-farm="{esc_name}"{conta_attr} onclick="farmToggle(this)" title="Ja a farmar — clica para parar">✅ Farmando</button>'
+        return f'<button type="button" class="ffarmbtn on" data-farm="{esc_name}"{conta_attr} onclick="farmToggle(this)" title="Alerta registado; o run.bat tem de estar aberto para vigiar os saves. Clica para parar.">🔔 Alerta registado</button>'
     else:
         return f'<button type="button" class="ffarmbtn" data-farm="{esc_name}"{conta_attr} onclick="farmToggle(this)" title="Farmar — vigia saves a cada 2s e toca alarme (auto-deteta a conta)">🎯 Farmar</button>'
 

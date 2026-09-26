@@ -41,6 +41,8 @@ alvos_builds.json
 data/tbhdata/alvos_builds.json
 var/farm_watch.json
 var/farm_watch.heartbeat
+var/farm_alert.heartbeat
+var/farm_alert_state.json
 var/visitas.json
 events.db
 debug.txt

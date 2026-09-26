@@ -223,6 +223,18 @@ def resolve_account_name(requested: str, accounts: list[dict]) -> str | None:
     return partial[0] if len(partial) == 1 else None
 
 
+def _accounts_for_targets(targets: list[dict], accounts: list[dict]) -> list[dict]:
+    """Limit explicit-account alerts to those saves; unscoped alerts need all accounts."""
+    if not targets or any(not str(target.get("conta") or "").strip() for target in targets):
+        return accounts
+    selected = {
+        resolved.casefold()
+        for target in targets
+        if (resolved := resolve_account_name(target.get("conta"), accounts))
+    }
+    return [account for account in accounts if account["name"].casefold() in selected]
+
+
 def _market_names(targets: list[dict], price_file: str = PRICE_FILE) -> set[str]:
     data = _read_json(price_file, {})
     if isinstance(data, dict):
@@ -337,9 +349,11 @@ def watcher_status(path: str = HEARTBEAT_FILE, now: float | None = None,
 
 def _write_heartbeat(targets: list[dict], accounts: list[dict], interval: float,
                      status: str = "running", error: str = "",
-                     path: str = HEARTBEAT_FILE) -> None:
+                     path: str = HEARTBEAT_FILE,
+                     watched_accounts: list[dict] | None = None) -> None:
     """Persists a small status marker so run.bat can confirm the watcher is alive."""
-    account_names = {str(account.get("name") or "").casefold() for account in accounts}
+    watched_accounts = accounts if watched_accounts is None else watched_accounts
+    account_names = {str(account.get("name") or "").casefold() for account in watched_accounts}
     unreadable = sorted(
         name for name in _LAST_SCAN_ERRORS
         if name.casefold() in account_names
@@ -354,6 +368,8 @@ def _write_heartbeat(targets: list[dict], accounts: list[dict], interval: float,
         "targets": [{"name": target["name"], "conta": target.get("conta") or ""} for target in targets],
         "account_count": len(accounts),
         "accounts": [account["name"] for account in accounts],
+        "watched_account_count": len(watched_accounts),
+        "watched_accounts": [account["name"] for account in watched_accounts],
         "unreadable_accounts": unreadable,
         "error": error,
     })
@@ -438,9 +454,9 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         print(f"[FARM] Ainda nao encontrei contas em {accounts_file}.", flush=True)
         return []
 
-    # Scans all accounts so automatic detection works, but only notifies accounts
-    # selected on a target. The actual matching below enforces the target account.
-    accounts = all_accounts
+    # Unscoped targets need all accounts to identify where a drop happened;
+    # explicit-account targets read only their selected saves.
+    accounts = _accounts_for_targets(targets, all_accounts)
     for target in targets:
         if target.get("conta") and not resolve_account_name(target["conta"], all_accounts):
             print(f"[FARM] A conta do alvo '{target['name']}' ('{target.get('conta')}') nao corresponde a nenhuma conta em {accounts_file}.", flush=True)
@@ -453,21 +469,13 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     if not isinstance(old_baselines, dict):
         old_baselines = {}
 
-    current, failed = scan_inventories(accounts, _market_names(targets, price_file), inventory)
+    current, failed = scan_inventories(accounts, _market_names(targets, price_file), inventory) if accounts else ({}, set())
     failed_accounts = {str(name).casefold() for name in failed}
     previous_accounts = {str(name).casefold(): items for name, items in previous.items()}
     for name in failed:
         if name.casefold() in previous_accounts:
             current[name] = previous_accounts[name.casefold()]
 
-    selected_targets = [target for target in targets if target.get("conta")]
-    if selected_targets and len(selected_targets) == len(targets):
-        allowed_accounts = {
-            (resolve_account_name(target["conta"], all_accounts) or "").casefold()
-            for target in selected_targets
-        } - {""}
-        accounts = [account for account in accounts if account["name"].casefold() in allowed_accounts]
-        current = {name: items for name, items in current.items() if name.casefold() in allowed_accounts}
     # A previously cached inventory can keep state stable during a save lock, but
     # must never be treated as a fresh read or used to seed a new target baseline.
     readable_current = {
@@ -542,7 +550,8 @@ def watch(interval: float = 2.0) -> None:
         started = time.monotonic()
         try:
             targets = load_targets()
-            accounts = load_accounts()
+            configured_accounts = load_accounts()
+            watched_accounts = _accounts_for_targets(targets, configured_accounts)
             target_signature = tuple((t["name"], t.get("conta") or "") for t in targets)
             if target_signature != last_signature:
                 last_signature = target_signature
@@ -557,29 +566,31 @@ def watch(interval: float = 2.0) -> None:
 
             # Sinaliza o arranque antes do primeiro scan, para o .bat confirmar que o
             # processo existe mesmo quando ainda nao ha alvos ou saves acessiveis.
-            _write_heartbeat(targets, accounts, interval, status="scanning" if targets else "starting")
+            _write_heartbeat(targets, configured_accounts, interval, status="scanning" if targets else "starting", watched_accounts=watched_accounts)
             if targets:
                 poll_once()
-                accounts = load_accounts()
-                configured_names = {account["name"].casefold() for account in accounts}
-                unreadable = len(configured_names & {name.casefold() for name in _LAST_SCAN_ERRORS})
-                if not accounts:
+                configured_accounts = load_accounts()
+                watched_accounts = _accounts_for_targets(targets, configured_accounts)
+                watched_names = {account["name"].casefold() for account in watched_accounts}
+                unreadable = len(watched_names & {name.casefold() for name in _LAST_SCAN_ERRORS})
+                unresolved = any(target.get("conta") and not resolve_account_name(target["conta"], configured_accounts) for target in targets)
+                if not configured_accounts:
                     status = "no_accounts"
-                elif unreadable == len(accounts):
+                elif unresolved or not watched_accounts:
+                    status = "account_not_found"
+                elif unreadable == len(watched_accounts):
                     status = "save_read_error"
                 elif unreadable:
                     status = "partial_warning"
-                elif any(target.get("conta") and not resolve_account_name(target["conta"], accounts) for target in targets):
-                    status = "account_not_found"
                 else:
                     status = "active"
-                _write_heartbeat(targets, accounts, interval, status=status)
-                good = max(0, len(accounts) - unreadable)
-                print(f"[FARM] {datetime.now().strftime('%H:%M:%S')} — {len(targets)} alvo(s); saves legiveis {good}/{len(accounts)}; verifica a cada {interval:g}s.", flush=True)
+                _write_heartbeat(targets, configured_accounts, interval, status=status, watched_accounts=watched_accounts)
+                good = max(0, len(watched_accounts) - unreadable)
+                print(f"[FARM] {datetime.now().strftime('%H:%M:%S')} — {len(targets)} alvo(s); saves vigiados legiveis {good}/{len(watched_accounts)}; verifica a cada {interval:g}s.", flush=True)
             else:
                 _LAST_SCAN_ERRORS.clear()
-                status = "waiting_for_targets" if accounts else "no_accounts"
-                _write_heartbeat(targets, accounts, interval, status=status)
+                status = "waiting_for_targets" if configured_accounts else "no_accounts"
+                _write_heartbeat(targets, configured_accounts, interval, status=status, watched_accounts=watched_accounts)
         except KeyboardInterrupt:
             print("\n[FARM] Vigia parado.", flush=True)
             return
@@ -622,6 +633,12 @@ def main(argv: list[str] | None = None) -> int:
             for name in account_rows
             if isinstance(name, str) and name.strip()
         ] if isinstance(account_rows, list) else []
+        watched_rows = heartbeat.get("watched_accounts", account_rows)
+        watched_accounts = [
+            {"name": str(name).strip()}
+            for name in watched_rows
+            if isinstance(name, str) and name.strip()
+        ] if isinstance(watched_rows, list) else []
         requested_account = resolve_account_name(args.conta, status_accounts) if args.conta else None
         target_rows = heartbeat.get("targets", [])
         targets = [target for target in target_rows if isinstance(target, dict)] if isinstance(target_rows, list) else []
@@ -632,7 +649,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         if heartbeat["alive"] and (not args.conta or requested_account) and watches_requested_account:
             status = str(heartbeat.get("status") or "?")
-            print(f"VIGIA ATIVO — {heartbeat.get('target_count', len(targets))} alvo(s), {heartbeat.get('account_count', len(status_accounts))} conta(s), estado: {status}.")
+            print(f"VIGIA ATIVO — {heartbeat.get('target_count', len(targets))} alvo(s), estado: {status}.")
+            print("Alvos: " + ("; ".join(
+                str(target.get("name") or "?") + (f" @ {target.get('conta')}" if target.get("conta") else " @ todas")
+                for target in targets
+            ) or "nenhum"))
+            print("Contas vigiadas: " + (", ".join(account["name"] for account in watched_accounts) or "nenhuma") + ".")
             if args.conta:
                 print(f"Conta pedida: {args.conta} -> {requested_account}.")
             print(f"Ultima verificacao: {heartbeat.get('updated_at', '?')}; intervalo: {heartbeat.get('interval_seconds', '?')}s.")

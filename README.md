@@ -63,7 +63,8 @@ src/                   → código Python
   tbh_inventario.py    → inventário a partir do save .es3
   tbh_sync.py          → confirma saves vs Steam Cloud antes do login (anti-perda)
   tbh_sieve.py         → scraping opcional (usesieve.com)
-  tbh_protocol.py      → protocolo tbh://
+  tbh_protocol.py      → protocolo tbh:// (regista alvos Farmar)
+  tbh_farm_alert.py    → vigia saves de 2 em 2s + popup de drop
 
 assets/                → icons, icons_chars, icons_hero, icons_passivos, maps/
 config/                → builds.example.json (copia para builds.json), .env.example

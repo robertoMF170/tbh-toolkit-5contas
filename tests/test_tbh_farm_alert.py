@@ -59,6 +59,33 @@ class TestAlertData(unittest.TestCase):
         self.assertIn("VIGIA ATIVO", output.getvalue())
         self.assertIn("geek1781 -> Conta 1 (geek1781)", output.getvalue())
 
+    def test_conta_explicita_restringe_a_leitura_a_conta_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": "geek1781"}], "hits": []})
+            write_json(accounts, {"contas": [
+                {"nome": "Conta 1 (geek1781)", "save": "save-1"},
+                {"nome": "Conta 2 (other)", "save": "save-2"},
+            ]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            inventory = mock.Mock()
+            inventory.carregar_dados_jogo.return_value = {"gear": {}, "nomes": {}}
+            inventory.itens_da_conta_detalhado.side_effect = [
+                (Counter({"Shadow Bow": 0}), Counter()),
+            ]
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+            ):
+                self.assertEqual(alert.poll_once(state, watch, accounts, prices, inventory, lambda hit: None), [])
+            inventory.itens_da_conta_detalhado.assert_called_once_with(
+                "save-1", inventory.carregar_dados_jogo.return_value, {"Shadow Bow"},
+            )
+
     def test_scan_dados_jogo_falhados_devolve_conta_como_nao_legivel(self):
         class MissingGameData:
             def carregar_dados_jogo(self):
