@@ -381,10 +381,9 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                 for account, items in previous_accounts.items()
             }
 
-        # Add newly configured accounts to an all-accounts target without a false hit.
-        if not target.get("conta"):
-            for account_name, items in current.items():
-                old_counts.setdefault(account_name.casefold(), _item_count(items, target["name"]))
+        # New accounts enter the baseline at their first valid read, not as false drops.
+        for account_name, items in current.items():
+            old_counts.setdefault(account_name.casefold(), _item_count(items, target["name"]))
 
         if target.get("conta"):
             account = accounts_by_fold.get(target["conta"].casefold())

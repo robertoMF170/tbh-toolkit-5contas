@@ -41,7 +41,7 @@ class TestFarmProtocol(unittest.TestCase):
         with mock.patch.object(tbh_farm_alert, "acknowledge_hits", return_value=2) as ack:
             tbh_protocol._handle_farm("tbh://farm?ack=Shadow%20Bow")
 
-        ack.assert_called_once_with("Shadow Bow", all_hits=False)
+        ack.assert_called_once_with("Shadow Bow", all_hits=False, conta="")
 
     def test_nao_instala_alertas_se_item_vazio(self):
         with mock.patch.object(tbh_farm_alert, "add_target") as add:
