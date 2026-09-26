@@ -150,23 +150,25 @@ if errorlevel 1 (
 echo.
 
 :sem_baus
-rem --- Alertas de farm: ficam nesta janela principal, sem abrir outro .bat ---
+rem --- Alertas de farm: arrancam nesta janela e deixam heartbeat de saude ---
 if not exist "%~dp0src\tbh_farm_alert.py" goto sem_farm_alert
-if exist "%~dp0config\baus.json" goto iniciar_farm_alert
-if exist "%~dp0baus.json" goto iniciar_farm_alert
-if exist "%~dp0src\tbh_baus.py" goto iniciar_farm_alert
-goto sem_farm_alert
-
 :iniciar_farm_alert
-echo [FARM] A iniciar alertas nesta janela — saves verificados de 2 em 2 segundos.
-echo       Clica Farmar na dashboard; popup identifica item e conta quando aparecer.
+echo [FARM] A arrancar vigia nesta janela; poll dos saves a cada 2 segundos.
+echo       Clica Farmar. Titulo = item/conta; popup aparece no drop encontrado.
 start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2
-if errorlevel 1 echo       AVISO: o processo de alertas nao arrancou; confirma se o Python esta instalado.
+echo       A verificar arranque do processo...
+timeout /t 2 /nobreak >nul
+python -X utf8 src\tbh_farm_alert.py --status --interval 2
+if errorlevel 1 (
+  echo [FARM] VIGIA INATIVO. Verifica o Python e os caminhos dos saves em config\baus.json.
+) else (
+  echo [FARM] OK — deixa esta janela aberta; o estado atualiza a cada 2 segundos.
+)
 echo.
 goto farm_alert_done
 
 :sem_farm_alert
-echo [FARM] Alertas indisponiveis: falta src\tbh_farm_alert.py ou config\baus.json.
+echo [FARM] Alertas indisponiveis: falta src\tbh_farm_alert.py.
 echo.
 
 :farm_alert_done
