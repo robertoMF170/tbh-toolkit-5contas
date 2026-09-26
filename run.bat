@@ -154,7 +154,8 @@ rem --- Alertas de farm: arrancam nesta janela e deixam heartbeat de saude ---
 if not exist "%~dp0src\tbh_farm_alert.py" goto sem_farm_alert
 :iniciar_farm_alert
 echo [FARM] A arrancar vigia nesta janela; poll dos saves a cada 2 segundos.
-echo       Clica Farmar. Titulo = item/conta; popup aparece no drop encontrado.
+echo       Clica Farmar. Titulo = item/conta; popup, beep e Discord no drop.
+echo       Webhook e mencao opcionais: python -X utf8 src\tbh_farm_alert.py --discord-setup
 if not exist "%~dp0var" mkdir "%~dp0var"
 python -X utf8 src\tbh_farm_alert.py --check-running >nul
 if not errorlevel 1 goto farm_already_running

@@ -8,6 +8,7 @@ import argparse
 import getpass
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -491,6 +492,11 @@ def _record_hit(hit: dict, path: str = WATCH_FILE) -> None:
 def notify_drop(hit: dict) -> None:
     message = f"ITEM ENCONTRADO: {hit['name']}\nConta: {hit['conta']}\nQuantidade nova: {hit['qtd']}"
     print(f"\n\a[FARM] {message.replace(chr(10), ' | ')}", flush=True)
+    try:
+        tbh_discord.send_alert(hit)
+    except Exception as exc:
+        # Remote notification must never prevent the local sound/popup.
+        print(f"[FARM] Aviso Discord falhou ({type(exc).__name__}); alerta local continua ativo.", flush=True)
     if os.name != "nt":
         return
     try:
@@ -696,6 +702,22 @@ def main(argv: list[str] | None = None) -> int:
         print("Confirma o envio com: python -X utf8 src\\tbh_farm_alert.py --test-discord", flush=True)
         return 0
     if args.test_discord:
+        webhook_url, mention_id = tbh_discord.discord_settings()
+        if not webhook_url:
+            print(f"Discord nao configurado ({tbh_discord.WEBHOOK_ENV} em .env).", flush=True)
+            return 1
+        if mention_id and not tbh_discord.valid_discord_user_id(mention_id):
+            print("ID de mencao Discord invalido; teste nao enviado.", flush=True)
+            return 2
+        allowed_user = tbh_discord.normalise_user_id(mention_id)
+        confirmed = input(
+            "Vai ser enviada uma mensagem de teste no canal configurado" +
+            (f" com mencao a <@{allowed_user}>" if allowed_user else " sem mencao") +
+            ". Escreve SIM para continuar: "
+        ).strip()
+        if confirmed != "SIM":
+            print("Teste Discord cancelado.", flush=True)
+            return 3
         ok = tbh_discord.send_alert(
             {"name": "Teste do alerta de farm", "conta": "teste manual", "qtd": 1},
             test=True,

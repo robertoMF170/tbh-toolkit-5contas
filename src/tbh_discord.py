@@ -46,26 +46,22 @@ def _read_setting(name: str, env_file: str = ENV_FILE) -> str:
 
 
 def discord_settings(env_file: str = ENV_FILE) -> tuple[str, str]:
-    """Return (webhook URL, optional allowed user ID) without logging either."""
+    """Return webhook URL and optional allowed user ID without logging either."""
     return _read_setting(WEBHOOK_ENV, env_file), _read_setting(MENTION_ENV, env_file)
 
 
-def valid_discord_user_id(value: str) -> bool:
-    value = str(value or "").strip()
-    if value.startswith("<@") and value.endswith(">"):
-        value = value[2:-1]
-        if value.startswith("!"):
-            value = value[1:]
-    return value.isascii() and value.isdigit() and 17 <= len(value) <= 20
-
-
-def _normalise_user_id(value: str) -> str:
+def normalise_user_id(value: str) -> str:
     value = str(value or "").strip()
     if value.startswith("<@") and value.endswith(">"):
         value = value[2:-1]
         if value.startswith("!"):
             value = value[1:]
     return value
+
+
+def valid_discord_user_id(value: str) -> bool:
+    value = normalise_user_id(value)
+    return value.isascii() and value.isdigit() and 17 <= len(value) <= 20
 
 
 def valid_webhook_url(value: str) -> bool:
@@ -98,7 +94,7 @@ def save_discord_settings(webhook_url: str, mention_id: str,
                           env_file: str = ENV_FILE) -> None:
     """Write webhook settings to .env, preserving unrelated local configuration."""
     webhook_url = str(webhook_url or "").strip()
-    mention_id = _normalise_user_id(mention_id)
+    mention_id = normalise_user_id(mention_id)
     if not valid_webhook_url(webhook_url):
         raise ValueError("URL de webhook Discord invalido; cria/renova o webhook no canal de destino.")
     if mention_id and not valid_discord_user_id(mention_id):
@@ -147,7 +143,7 @@ def save_discord_settings(webhook_url: str, mention_id: str,
 
 
 def build_payload(hit: dict, mention_id: str = "", test: bool = False) -> dict:
-    user_id = _normalise_user_id(mention_id)
+    user_id = normalise_user_id(mention_id)
     if not valid_discord_user_id(user_id):
         user_id = ""
     mention = f"<@{user_id}> " if user_id else ""
@@ -182,8 +178,8 @@ def post_webhook(url: str, payload: dict, timeout: float = REQUEST_TIMEOUT_SECON
 
 def send_alert(hit: dict, *, webhook_url: str | None = None,
                mention_id: str | None = None, transport=None,
-               test: bool = False, sleep=time.sleep) -> bool:
-    """Send a webhook once, retrying transient network, 429 and server failures."""
+               test: bool = False, sleep=None) -> bool:
+    """Send once, retrying explicit Discord 429 and server failures (not timeouts)."""
     configured_url, configured_user = discord_settings()
     url = configured_url if webhook_url is None else str(webhook_url).strip()
     user_id = configured_user if mention_id is None else str(mention_id).strip()
@@ -197,6 +193,7 @@ def send_alert(hit: dict, *, webhook_url: str | None = None,
         print("[FARM] ID de mencao Discord invalido; nada enviado.", flush=True)
         return False
 
+    sleeper = sleep or time.sleep
     payload = build_payload(hit, user_id, test=test)
     sender = transport or post_webhook
     for attempt in range(MAX_ATTEMPTS):
@@ -210,10 +207,9 @@ def send_alert(hit: dict, *, webhook_url: str | None = None,
             except (TypeError, ValueError, AttributeError):
                 retry_after = None
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            if attempt + 1 < MAX_ATTEMPTS:
-                sleep(0.5 * (2 ** attempt))
-                continue
-            print(f"[FARM] Falha de rede no Discord ({type(exc).__name__}); alerta local continua ativo.", flush=True)
+            # A timed-out POST may already have reached Discord. Do not blindly
+            # repeat it and risk duplicate pings; the next distinct drop is retried.
+            print(f"[FARM] Falha de rede no Discord ({type(exc).__name__}); sem reenvio para evitar duplicados.", flush=True)
             return False
         except Exception as exc:
             print(f"[FARM] Falha no envio Discord ({type(exc).__name__}); alerta local continua ativo.", flush=True)
@@ -227,7 +223,7 @@ def send_alert(hit: dict, *, webhook_url: str | None = None,
             return True
         if (status == 429 or status >= 500) and attempt + 1 < MAX_ATTEMPTS:
             delay = retry_after if retry_after is not None else 0.5 * (2 ** attempt)
-            sleep(max(0.1, min(delay, 3.0)))
+            sleeper(max(0.1, min(delay, 3.0)))
             continue
         print(f"[FARM] Discord respondeu HTTP {status}; alerta local continua ativo.", flush=True)
         return False
