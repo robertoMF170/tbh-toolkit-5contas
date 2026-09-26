@@ -969,9 +969,9 @@ function makeZoom(wrapId,mvId,MW,start){
 const B=__DATA__;
 const DROP_MAP=__DROP_MAP__;
 const MAP_POS=__MAP_POS__;
-window.__FARM_WATCH__=__FARM_WATCH_JSON__;
 window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN__';
 const FARM_API_URL=(location.protocol==='http:' && (location.hostname==='127.0.0.1'||location.hostname==='localhost'))?location.origin+'/api/farm':'';
+window.__FARM_WATCH__=__FARM_WATCH_JSON__;
 const N=B.titles.length;
 const zS=B.w.map((w,i)=>makeZoom('viewSkills','skz'+i,w,0.7));
 const zR=makeZoom('viewRunes','runesZoomer',B.rw,0.5);
@@ -1237,7 +1237,8 @@ document.getElementById('mclose').addEventListener('click',closeImport);
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeImport();});
 document.getElementById('murl').addEventListener('keydown',e=>{if(e.key==='Enter')doImport();if(e.key==='Escape')closeImport();});
 applyHidden();
-renderFarmWatchBar(window.__FARM_WATCH__);
+refreshFarmWatchBar();
+setInterval(refreshFarmWatchBar, 5000);
 
 /* ---------- modo FARM em ciclo: auto-reload a cada 2 min (só na HOME, sem perder build aberta) ---------- */
 (function(){
@@ -1400,6 +1401,44 @@ function relocateFarmToBottom(i){
   // ajusta altura da faixa para a arvore nao ficar por baixo (max 38vh)
   // deixa treewrap respirar — com-farm ja tem bottom 220px no CSS
 }
+window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN__';
+const FARM_API_URL=(location.protocol==='http:' && (location.hostname==='127.0.0.1'||location.hostname==='localhost'))?location.origin+'/api/farm':'';
+window.__FARM_WATCH__=__FARM_WATCH_JSON__;
+function farmEscape(value){
+  return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});
+}
+function farmAccountForButton(btn){
+  var conta=btn.getAttribute('data-conta')||'';
+  try{if(!conta&&typeof cur==='number'&&cur>=0&&B.urls&&B.urls[cur]){var m=(B.urls[cur]||'').match(/\|user=([^|]+)/);if(m)conta=m[1];}}catch(e){}
+  return conta;
+}
+function farmApi(action,name,conta){
+  if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__) return Promise.reject(new Error('Abre a dashboard pelo run.bat para gerir alertas sem permissões do browser.'));
+  var options={method:action?'POST':'GET',headers:{'X-TBH-Farm-Token':window.__TBH_FARM_API_TOKEN__},cache:'no-store'};
+  if(action){options.headers['Content-Type']='application/json';options.body=JSON.stringify({action:action,name:name,conta:conta||''});}
+  return fetch(FARM_API_URL,options).then(function(response){return response.json().then(function(data){if(!response.ok||!data.ok)throw new Error(data.erro||'Não foi possível atualizar os alertas.');return data;});});
+}
+function syncFarmButtons(w){
+  document.querySelectorAll('.ffarmbtn').forEach(function(btn){
+    var name=(btn.getAttribute('data-farm')||'').trim().toLowerCase(),account=farmAccountForButton(btn).trim().toLowerCase();
+    var active=(w.targets||[]).some(function(target){var targetName=String(target.name||'').trim().toLowerCase(),targetAccount=String(target.conta||'').trim().toLowerCase();return name===targetName&&(!targetAccount||!account||targetAccount===account||account.endsWith('('+targetAccount+')'));});
+    btn.classList.toggle('on',active);btn.textContent=active?'🔔 A vigiar':'🎯 Vigiar item';
+    btn.title=active?'Este item está na lista. Clica para deixar de vigiar.':'Adicionar este item à lista, sem abrir janelas do browser.';
+  });
+}
+function farmAction(action,name,conta){
+  var bar=document.getElementById('farmWatchBar');
+  if(bar){bar.classList.add('show');bar.textContent=action==='remove'?'A remover o alerta…':action==='ack'?'A confirmar o drop…':'A registar o item…';}
+  return farmApi(action,name,conta).then(function(data){
+    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};syncFarmButtons(window.__FARM_WATCH__);renderFarmWatchBar(window.__FARM_WATCH__);
+    return data;
+  }).catch(function(error){if(bar){bar.classList.add('show');bar.textContent=error.message||'Não foi possível falar com o run.bat. Abre-o e volta a tentar.';}throw error;});
+}
+window.farmToggle=function(btn){
+  if(btn.dataset.busy==='1')return;var name=btn.getAttribute('data-farm')||'';if(!name)return;
+  btn.dataset.busy='1';btn.disabled=true;
+  farmAction(btn.classList.contains('on')?'remove':'add',name,farmAccountForButton(btn)).then(function(data){toast(data.message+' — o run.bat mantém a vigia ativa.');}).catch(function(){}).finally(function(){btn.dataset.busy='';btn.disabled=false;});
+};
 function restoreFarmToSidebar(i){
   var dst = document.getElementById('farmBottom');
   var src = document.getElementById('sw'+i);
@@ -1447,6 +1486,48 @@ function renderFarmWatchBar(w){
     });
   }
   bar.innerHTML=html;
+  bar.classList.add('show');
+}
+function refreshFarmWatchBar(){
+  if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__){
+    renderFarmWatchBar(window.__FARM_WATCH__||{targets:[],hits:[]});
+    return;
+  }
+  farmApi().then(function(data){
+    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};
+    syncFarmButtons(window.__FARM_WATCH__);
+    renderFarmWatchBar(window.__FARM_WATCH__);
+  }).catch(function(){});
+}
+function renderFarmWatchBar(w){
+  var bar=document.getElementById('farmWatchBar');if(!bar||!w)return;
+  var targets=w.targets||[],allHits=w.hits||[],pending=allHits.filter(function(hit){return !hit.acknowledged;});
+  if(!targets.length&&!pending.length){bar.classList.remove('show');bar.innerHTML='';return;}
+  var html='<h4>🎯 ALERTAS DE FARM — <span style="color:#7ee787">'+targets.length+' alvo(s)</span> · atualização automática</h4>';
+  if(targets.length){
+    html+='<div class="fw-tags">';
+    targets.forEach(function(target){
+      var name=String(target.name||'?'),account=String(target.conta||''),quantity=0;
+      allHits.forEach(function(hit){
+        var wanted=account.trim().toLowerCase(),actual=String(hit.conta||'').trim().toLowerCase();
+        if(String(hit.name||'').trim().toLowerCase()===name.trim().toLowerCase()&&(!wanted||actual===wanted||actual.endsWith('('+wanted+')')))quantity+=Math.max(0,parseInt(hit.qtd,10)||0);
+      });
+      html+='<span class="fw-tag"><b>'+farmEscape(name)+'</b><span style="color:#a89878">'+farmEscape(account?' @ '+account:' @ todas')+' · '+quantity+' encontrada(s)</span><button type="button" data-farm-action="remove" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">Parar</button></span>';
+    });
+    html+='</div>';
+  }
+  pending.slice(-3).forEach(function(hit){
+    var name=String(hit.name||'?'),account=String(hit.conta||'?');
+    html+='<div class="fw-hit">🔔 <b>'+farmEscape(name)+'</b> @ '+farmEscape(account)+' ×'+(parseInt(hit.qtd,10)||1)+' — drop encontrado <button type="button" data-farm-action="ack" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">✓ Confirmar</button></div>';
+  });
+  html+='<div style="margin-top:6px;font-size:11px;color:#a89878;">O run.bat verifica os saves de 2 em 2 segundos em segundo plano. Não precisas de autorizar pop-ups do browser.</div>';
+  bar.innerHTML=html;
+  bar.querySelectorAll('[data-farm-action]').forEach(function(button){
+    button.addEventListener('click',function(){
+      button.disabled=true;
+      farmAction(button.dataset.farmAction,button.dataset.name,button.dataset.conta).then(function(data){toast(data.message);}).catch(function(){}).finally(function(){button.disabled=false;});
+    });
+  });
   bar.classList.add('show');
 }
 // fecha IIFE do FARM EM CICLO já fechado acima — mantém escopo limpo
@@ -1993,6 +2074,8 @@ __JS__
   vbSend('visit');
   setInterval(function(){ vbSend('ping'); }, 45000);
   setInterval(vbRefresh, 30000);
+  setInterval(refreshFarmWatchBar,5000);
+  refreshFarmWatchBar();
 })();
 </script>
 </body></html>"""
@@ -2007,22 +2090,13 @@ __JS__
         # valida JSON
         json.loads(map_pos_json)
     except Exception: map_pos_json="{}"
-    # farm watch payload (targets + hits pendentes) — para a barra no topo
-    try:
-        _wf_path = os.path.join(ROOT, "var", "farm_watch.json")
-        if not os.path.exists(_wf_path):
-            for _alt in [os.path.join(ROOT, "farm_watch.json"), os.path.join(BASE, "farm_watch.json")]:
-                if os.path.exists(_alt): _wf_path=_alt; break
-        if os.path.exists(_wf_path):
-            _wf = json.load(open(_wf_path, encoding="utf-8-sig"))
-            # só manda targets + hits não confirmados (para barra)
-            _wf_mini = {"targets": _wf.get("targets",[]), "hits": [h for h in _wf.get("hits",[]) if not h.get("acknowledged")]}
-            farm_watch_json = json.dumps(_wf_mini, ensure_ascii=False, separators=(',', ':'))
-        else:
-            farm_watch_json = "{\\\"targets\\\":[],\\\"hits\\\":[]}"
-    except Exception as _e_fw:
-        farm_watch_json = "{\\\"targets\\\":[],\\\"hits\\\":[]}"
-    _js2 = JS.replace("__DATA__", data_json).replace("__DROP_MAP__", drop_json).replace("__MAP_POS__", map_pos_json).replace("__FARM_WATCH_JSON__", farm_watch_json)
+    # Farm-watch state is fetched from the local API; never embed private save data in the HTML.
+    farm_watch_json = "{\"targets\":[],\"hits\":[]}"
+    _js2 = (JS.replace("__DATA__", data_json)
+            .replace("__DROP_MAP__", drop_json)
+            .replace("__MAP_POS__", map_pos_json)
+            .replace("__FARM_WATCH_JSON__", farm_watch_json)
+            .replace("__TBH_FARM_API_TOKEN__", "__TBH_FARM_API_TOKEN__"))
     doc = (doc
            .replace("__CSS__", CSS)
            .replace("__FARMOP__", farm_html)

@@ -211,11 +211,14 @@ class VisitasHandler(BaseHTTPRequestHandler):
 
     # -- helpers -----------------------------------------------------------
     def _cors(self):
-        """Allow browser access only from this local dashboard (or file://)."""
-        if self._farm_request_is_local():
-            origin = self.headers.get("Origin", "")
-            self.send_header("Access-Control-Allow-Origin", "null" if origin == "null" else origin)
-            self.send_header("Vary", "Origin")
+        """Keep public stats compatible; allow farm writes only for same-machine origins."""
+        if self.path.split("?", 1)[0] == "/api/farm":
+            if self._farm_request_is_local():
+                origin = self.headers.get("Origin", "")
+                self.send_header("Access-Control-Allow-Origin", "null" if origin == "null" else origin)
+                self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-TBH-Farm-Token")
         self.send_header("Access-Control-Max-Age", "600")
@@ -290,7 +293,11 @@ class VisitasHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         rota = self.path.split("?", 1)[0]
         if rota == "/api/health":
-            self._json({"ok": True, "farm_api": 1})
+            self._json({
+                "ok": True,
+                "farm_api": 1,
+                "root": os.path.realpath(getattr(self.server, "tbh_root", ROOT)),
+            })
         elif rota == "/api/farm":
             if not self._farm_request_is_local() or not hmac.compare_digest(
                 self.headers.get("X-TBH-Farm-Token", ""),
@@ -331,6 +338,8 @@ class VisitasHandler(BaseHTTPRequestHandler):
             allowed_hosts.update({f"127.0.0.1:{port}", f"[::1]:{port}"})
         elif bound_host in {"127.0.0.1", "::1"}:
             allowed_hosts.add(f"{bound_host}:{port}" if bound_host != "::1" else f"[::1]:{port}")
+        elif bound_host == "localhost":
+            allowed_hosts.add(f"127.0.0.1:{port}")
         allowed_origins = {f"http://{host}" for host in allowed_hosts} | {"null"}
         return (
             peer_is_local
@@ -422,7 +431,11 @@ def main(argv=None) -> int:
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{args.port}/api/health", timeout=2) as response:
                 health = json.loads(response.read().decode("utf-8"))
-            if response.status == 200 and health.get("farm_api") == 1:
+            if (
+                response.status == 200
+                and health.get("farm_api") == 1
+                and os.path.realpath(str(health.get("root") or "")) == os.path.realpath(args.root)
+            ):
                 print("[visitas] API local TBH pronta.", flush=True)
                 return 0
         except (OSError, ValueError, urllib.error.URLError):
