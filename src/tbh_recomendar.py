@@ -394,7 +394,24 @@ def plano_completo(save_path: str, alvos_build: dict = None) -> dict:
                 out[kid] = int(v)
         return out
 
+    ordem_map = (alvos_build or {}).get("ordem") or {}
     skills = []
+    feitos = []
+
+    def _regista(hnome_h, ti, k, pid, info, atual, alvo):
+        item = {
+            "id": pid, "nome": str(info.get("pt") or info.get("name") or info.get("label") or pid),
+            "heroi": hnome_h,
+            "atual": atual, "alvo": alvo, "max": info.get("maxLevel", 1),
+            "tier": ti, "fila": k + 1,
+            "row_y": 130 + ti * 128 + 64, "col_x": 90 + k * 78 + 64,
+            "ordem": ordem_map.get(str(pid), 10 ** 6),
+        }
+        if atual >= alvo:
+            feitos.append(item)  # ja atingido — nunca aparece como "por fazer"
+        else:
+            skills.append(item)
+
     for hero in sv["herois"]:
         h = hero["key"]
         hnome_h = HERO_NOMES.get(h, "Herói " + str(h))
@@ -423,20 +440,43 @@ def plano_completo(save_path: str, alvos_build: dict = None) -> dict:
                     if ti > grupos:
                         continue
                     alvo = info.get("maxLevel", 1)
-                if atual >= alvo:
-                    continue  # esse alvo ja foi atingido no save atual
-                skills.append({
-                    "id": pid, "nome": str(info.get("pt") or info.get("name") or info.get("label") or pid),
-                    "heroi": hnome_h,
-                    "atual": atual, "alvo": alvo, "max": info.get("maxLevel", 1),
-                    "tier": ti, "fila": k + 1,
-                    "row_y": 130 + ti * 128 + 64, "col_x": 90 + k * 78 + 64,
-                })
-    skills.sort(key=lambda s: (s["tier"], -min(s["atual"] / max(1, s["alvo"]), 1.0)))  # por tier, mais perto de completar primeiro
+                _regista(hnome_h, ti, k, pid, info, atual, alvo)
+
+    # herois da build que a conta ainda NAO tem (builds que trocam de heroi/especializacao):
+    # entram no plano como "por fazer" — nao ficam esquecidos
+    if alvos:
+        _save_keys = {hero["key"] for hero in sv["herois"]}
+        for h, tree in (d["data"]["trees"] or {}).items():
+            if h in _save_keys:
+                continue
+            alvos_h = _alvos_do_heroi(h)
+            if not alvos_h:
+                continue
+            hnome_h = HERO_NOMES.get(h, "Herói " + str(h)) + " (por desbloquear)"
+            for ti, tier in enumerate(tree.get("tiers") or []):
+                slots = []
+                if tier.get("passives"):
+                    slots.extend(tier["passives"][:2])
+                slots.extend(tier.get("actives") or [])
+                for k, pid in enumerate(slots):
+                    if pid not in alvos_h:
+                        continue
+                    alvo = alvos_h[pid]
+                    if alvo <= 0:
+                        continue
+                    info = (d["data"]["passives"].get(pid) if pid >= 100000 else d["data"]["actives"].get(pid))
+                    if not info:
+                        continue
+                    _regista(hnome_h, ti, k, pid, info, sv["attrs"].get(pid, 0), alvo)
+
+    # ORDEM DA BUILD (a ordem do guia manda) — desempate por tier/fila
+    skills.sort(key=lambda s: (s.get("ordem", 10 ** 6), s["tier"], s["fila"]))
+    feitos.sort(key=lambda s: (s.get("ordem", 10 ** 6), s["tier"], s["fila"]))
 
     runas = []
+    runas_feitas = 0
     rota = (alvos_build or {}).get("runas") or _rota_late(d)
-    # so runas ALCANCADAS (Level 0 = compraveis ja) primeiro; 🔒 = ainda nao alcançadas
+    # rota COMPLETA desta build, pela ordem certa — sem saltar nenhuma runa nem passos
     nodes = d["mp"]["nodes"]
     xs = [v[0] for v in nodes.values()]
     ys = [v[1] for v in nodes.values()]
@@ -444,33 +484,56 @@ def plano_completo(save_path: str, alvos_build: dict = None) -> dict:
     minx, maxy = min(xs) - pad, max(ys) + pad
     for ordem, nid in enumerate(rota, 1):
         nid = int(nid)
-        if sv["runas"].get(nid, 0) > 0:
-            continue  # comprada
         info = d["runes"].get(nid, {})
         nx, ny = nodes.get(str(nid), (0, 0))
+        estado = ("feito" if sv["runas"].get(nid, 0) > 0 else ("comprar" if nid in sv["runas"] else "lock"))
+        if estado == "feito":
+            runas_feitas += 1
         runas.append({
             "id": nid, "nome": str(info.get("label", "?")),
-            "ordem": ordem, "custo": d["costs"].get(nid, {}).get("total", 0),
-            "owned": 0,
-            "lock": nid not in sv["runas"],
+            "ordem": ordem, "total": len(rota),
+            "custo": d["costs"].get(nid, {}).get("total", 0),
+            "estado": estado, "owned": 1 if estado == "feito" else 0,
+            "lock": estado == "lock",
             "row_y": maxy - ny, "col_x": nx - minx,
         })
-    runas.sort(key=lambda r: r["lock"])  # compraveis primeiro, 🔒 depois
-    runas = runas[:12]
-    resumo = str(len(skills)) + " skills · " + str(len([r for r in (alvos_build or {}).get("runas") or rota if sv["runas"].get(int(r), 0) == 0])) + " runas pela frente"
-    return {"skills": skills, "runas": runas, "resumo": resumo}
+    resumo = (str(len(skills)) + " skills por fazer · " + str(len(feitos)) + " feitas · "
+              + str(len(rota) - runas_feitas) + " runas pela frente")
+    return {"skills": skills, "feitos": feitos, "runas": runas, "resumo": resumo}
 
 
 def aba_up_html(plano: dict, nome_conta: str = "") -> str:
-    """Conteudo da aba 'UPAR JÁ' (linhas clicáveis com posição na árvore/mapa)."""
+    """Conteudo da aba 'UPAR JÁ': ✓ JÁ FEITO vs ⚡ POR FAZER, pela ORDEM DA BUILD.
+    As linhas sao clicáveis e saltam para a posição na árvore/mapa."""
     dca = ' data-conta="' + _esc(nome_conta) + '"' if nome_conta else ""
     if not plano:
         return '<p class="rec-dim">Sem plano (save não encontrado ou tudo feito).</p>'
+    hint = (
+        '<div class="upHint"><b>COMO USAR ESTE PLANO (passo a passo)</b><br>'
+        '1️⃣ <b>✓ JÁ FEITO</b> — já está feito, podes ignorar (não percas tempo).<br>'
+        '2️⃣ <b>⚡ POR FAZER</b> — faz <u>por ordem de cima para baixo</u>: 1., depois 2., depois 3… '
+        'sobe a skill ao nível indicado e só depois passa à seguinte.<br>'
+        '3️⃣ <b>🔷 RUNAS</b> — compra sempre a próxima da lista (#1, #2, #3…) — <u>nunca saltes passos</u>. '
+        '🔒 = ainda não consegues comprar (mais à frente).<br>'
+        '4️⃣ Clica em qualquer linha para saltar logo para a skill / runa no mapa.<br>'
+        '⚠️ Siga <b>esta</b> build — cada página de build tem o SEU plano (não mistures com outras builds).</div>'
+    )
     linhas = []
+    ft = plano.get("feitos") or []
     sk = plano.get("skills") or []
+    if ft:
+        linhas.append('<details class="updet"><summary class="upsec upsec-feito">✓ JÁ FEITO (' + str(len(ft)) + ')</summary>')
+        for s in ft:
+            pos = "T" + str(s["tier"] + 1) + " · fila " + str(s["fila"])
+            extra = ' <span class="rec-dim">(tens ' + str(s["atual"]) + ')</span>' if s["atual"] > s["alvo"] else ""
+            linhas.append(
+                '<div class="upline done"><span>✓ <b>' + _esc(s["heroi"]) + "</b> · " + _esc(s["nome"])
+                + " — feito (alvo " + str(s["alvo"]) + ")" + extra + "</span>"
+                '<span class="uppos">árvore: ' + pos + "</span></div>")
+        linhas.append("</details>")
     if sk:
-        linhas.append('<div class="upsec">⚡ SKILLS DO HEROI — POR ORDEM</div>')
-        for s in sk:
+        linhas.append('<div class="upsec">⚡ POR FAZER — PELA ORDEM DA BUILD</div>')
+        for i, s in enumerate(sk, 1):
             pos = "T" + str(s["tier"] + 1) + " · fila " + str(s["fila"])
             if s["alvo"] < s["max"]:
                 alvo = "até <b>" + str(s["alvo"]) + "</b>/" + str(s["max"])
@@ -478,25 +541,38 @@ def aba_up_html(plano: dict, nome_conta: str = "") -> str:
                 alvo = "até <b>" + str(s["max"]) + "</b> (max)"
             linhas.append(
                 '<div class="upline go"' + dca + ' data-skill="' + str(s["id"]) + '" onclick="window.recGo&&recGo(this)">'
-                '<span>→ <b>' + _esc(s["heroi"]) + "</b> · " + _esc(s["nome"]) + " " + str(s["atual"]) + "→ " + alvo + "</span>"
+                "<span>" + str(i) + ". → <b>" + _esc(s["heroi"]) + "</b> · " + _esc(s["nome"]) + " " + str(s["atual"]) + "→ " + alvo + "</span>"
                 '<span class="uppos">árvore: ' + pos + "</span></div>")
+    else:
+        linhas.append('<p class="updone">✓ Skills todas no alvo desta build!</p>')
     rn = plano.get("runas") or []
+    rn_feitas = [r for r in rn if r.get("estado") == "feito"]
+    rn_pend = [r for r in rn if r.get("estado") != "feito"]
     if rn:
-        linhas.append('<div class="upsec">🔷 RUNAS — COMPRÁVEIS AGORA (já alcançadas no mapa)</div>')
-        for r in rn:
+        linhas.append('<div class="upsec">🔷 RUNAS — ROTA DESTA BUILD (sem saltar passos)</div>')
+        if rn_feitas:
+            linhas.append('<details class="updet"><summary class="upsec upsec-feito">✓ ' + str(len(rn_feitas)) + ' runas já feitas</summary>')
+            for r in rn_feitas:
+                pos = "col " + str(int(r["col_x"] // 72 + 1)) + " · linha " + str(int(r["row_y"] // 72 + 1))
+                linhas.append(
+                    '<div class="upline done"><span>✓ <b>' + _esc(r["nome"]) + "</b> #" + str(r["ordem"]) + "/" + str(r.get("total", "?")) + "</span>"
+                    '<span class="uppos">mapa: ' + pos + "</span></div>")
+            linhas.append("</details>")
+        for r in rn_pend:
             pos = "col " + str(int(r["col_x"] // 72 + 1)) + " · linha " + str(int(r["row_y"] // 72 + 1))
             if r.get("lock"):
                 linhas.append(
                     '<div class="upline dim"' + dca + ' data-runa="' + str(r["id"]) + '">'
-                    '<span>🔒 <b>' + _esc(r["nome"]) + "</b> #" + str(r["ordem"]) + "</span>"
+                    '<span>🔒 <b>' + _esc(r["nome"]) + "</b> #" + str(r["ordem"]) + "/" + str(r.get("total", "?")) + "</span>"
                     '<span class="uppos">ainda não alcançada · mapa: ' + pos + "</span></div>")
             else:
                 linhas.append(
                     '<div class="upline go"' + dca + ' data-runa="' + str(r["id"]) + '" onclick="window.recGo&&recGo(this)">'
-                    '<span>→ <b>' + _esc(r["nome"]) + "</b> #" + str(r["ordem"]) + ' <span class="rec-dim">(≈' + _fmt_ouro(r["custo"]) + " ouro)</span></span>"
+                    '<span>→ <b>' + _esc(r["nome"]) + "</b> #" + str(r["ordem"]) + "/" + str(r.get("total", "?")) + ' <span class="rec-dim">(≈' + _fmt_ouro(r["custo"]) + " ouro)</span></span>"
                     '<span class="uppos">mapa: ' + pos + "</span></div>")
     if not linhas:
         return '<p class="updone">✓ Tudo no máximo — esta conta já atingiu o plano desta build!</p>'
+    linhas.insert(0, hint)
     return "".join(linhas)
 
 

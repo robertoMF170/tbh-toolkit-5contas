@@ -1,15 +1,13 @@
-# --- Python ---
+﻿# --- Python ---
 __pycache__/
 *.pyc
 .venv/
 venv/
-
 # --- Segredos / ambiente ---
 .env
 *.env
 ngrok_domain.txt
-
-# --- Dados pessoais (módulos e estado privados) ---
+# --- Dados pessoais (mÃ³dulos e estado privados) ---
 src/abrir_steam.py
 src/tbh_baus.py
 src/tbh_farm_watch.py
@@ -24,7 +22,6 @@ Sandboxie_*.ini
 *.es3
 !data/baus_para_importar/*.es3
 !baus_para_importar/*.es3
-
 # --- Estado / caches runtime ---
 *.log
 baus_cache.json
@@ -44,17 +41,16 @@ alvos_builds.json
 data/tbhdata/alvos_builds.json
 var/farm_watch.json
 var/farm_watch.heartbeat
+var/visitas.json
 events.db
 debug.txt
-
-# --- Saídas geradas (regenerar com src/tbh_site.py) ---
+# --- SaÃ­das geradas (regenerar com src/tbh_site.py) ---
 minhas_builds.html
 inventario.html
 _farm_preview.html
 arvore_*.html
 mapa_runas.html
-
-# --- Artefactos temporários / debug ---
+# --- Artefactos temporÃ¡rios / debug ---
 _tmp_js*.js
 _tmp_last_js.js
 _extracted.js
@@ -67,7 +63,6 @@ verif*.png
 shots/
 capturas/
 /captures/
-
 # --- Imagens de debug do alinhamento de mapas ---
 assets/maps/*_dbg.png
 assets/maps/*_adapt.png
@@ -75,7 +70,6 @@ assets/maps/*_dilated.png
 assets/maps/*_edges.png
 assets/maps/*_tmpl.png
 assets/maps_from_game/
-
 # --- Sistema / ferramentas ---
 .freebuff/
 node_modules/
@@ -85,3 +79,5 @@ Sandboxie_backup.ini
 Sandboxie_utf8.ini
 abrir_conta*.bat
 conta*.es3
+app.log
+app.err.log

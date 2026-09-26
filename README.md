@@ -7,7 +7,7 @@ Tudo corre localmente em Python — sem contas, sem chaves e sem dados pessoais.
 ## Uso rápido (único arranque)
 
 ```bat
-run.bat              :: gera o site completo e abre o dashboard no browser
+run.bat              :: confirma saves vs Steam Cloud, gera o site e abre o dashboard
 run.bat --forcar     :: (só com módulos locais) força arranque de todas as sandboxes
 ```
 
@@ -25,6 +25,17 @@ python src\tbh_site.py        :: gera minhas_builds.html e inventario.html
 2. Copia `config/builds.example.json` para `config/builds.json` e ajusta as tuas builds (URLs do `tbhindex.com`).
 3. Corre `python src\tbh_site.py` (ou `run.bat`).
 4. Abre `minhas_builds.html` no browser.
+
+## Proteção de saves (anti-perda de dados)
+
+Antes de arrancar qualquer conta, o `run.bat` corre `src/tbh_sync.py --pre`, que:
+
+- **faz sempre backup** do save local para `var/saves_backup/<conta>/` (guarda os 20 mais recentes);
+- compara o save local (`SaveFile_Live.es3`) com a **cache da Steam Cloud** (`Steam\userdata\<id>\3678970\ac\...`);
+- se o save local faltar, estiver vazio ou corrompido, **restaura da cloud** (ou do backup mais novo);
+- se a **cloud estiver mais nova** que o local, avisa e pergunta antes de arrancar — assim um save velho nunca sobrescreve a cloud e perdes progresso.
+
+Também corre sozinho: `python src\tbh_sync.py --pre` (ou `--auto` para não perguntar).
 
 ## O que a dashboard dá
 
@@ -49,6 +60,7 @@ src/                   → código Python
   tbh_farm.py          → farm OP (top híbrido/baleias/líquidos + Dropa em)
   tbh_recomendar.py    → motor UPAR JÁ
   tbh_inventario.py    → inventário a partir do save .es3
+  tbh_sync.py          → confirma saves vs Steam Cloud antes do login (anti-perda)
   tbh_sieve.py         → scraping opcional (usesieve.com)
   tbh_protocol.py      → protocolo tbh://
 

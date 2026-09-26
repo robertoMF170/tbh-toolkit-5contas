@@ -369,17 +369,21 @@ def _dif_badge(txt: str, dif: str) -> str:
     return esc(txt)
 
 
-def _alvos_da_build(build: dict) -> dict:
-    """{skills: {id: nivel_alvo}} por heroi da build (para o plano UPAR JÁ da conta).
-    As sections cruas nao tem src/kind — e preciso o match_section para os obter."""
+def _alvos_da_build(build: dict, ideal: list = None) -> dict:
+    """{skills: {id: nivel_alvo}, runas: [rota ideal], ordem: {id: passo}} da build
+    (para o plano UPAR JÁ da conta). A ordem segue os passos do guia — assim o plano
+    acompanha a build (incluindo as que trocam de heroi/especializacao) sem confundir
+    o que ja esta feito com o que falta."""
     from tbh_inventario import HERO_NOMES
     import tbh_arvore as ta
     try:
         data = ta.load_game_data()
     except Exception:
-        return {"skills": {}, "runas": []}
+        return {"skills": {}, "runas": [], "ordem": {}}
     nome_code = {v.lower(): k for k, v in HERO_NOMES.items()}
     skills = {}
+    ordem = {}
+    passo = 0
     for sec in build.get("sections", []):
         hnome = re.sub(r"\s*\(level \d+\)", "", sec.get("hero", "")).strip().lower()
         if nome_code.get(hnome) is None:
@@ -393,7 +397,10 @@ def _alvos_da_build(build: dict) -> dict:
                 continue
             k = str(st["src"])
             skills[k] = max(skills.get(k, 0), int(st["lvl"]))
-    return {"skills": skills, "runas": []}
+            if k not in ordem:
+                ordem[k] = passo
+            passo += 1
+    return {"skills": skills, "runas": [int(n) for n in (ideal or [])], "ordem": ordem}
 
 
 def load_char_icons() -> dict:
@@ -761,6 +768,13 @@ CSS = """
   .uppos { color:#8a7a5a; font-size:11px; white-space:nowrap; }
   .upempty { color:#8a7a5a; font-size:12px; padding:8px 0; }
   .updone { color:#7ee787; font-size:13px; padding:10px 0; }
+  .upline.done { color:#7ee787; opacity:.85; }
+  .upsec-feito { color:#7ee787; cursor:pointer; }
+  .updet summary { list-style:none; }
+  .updet summary::-webkit-details-marker { display:none; }
+  .bstatus { display:inline-flex; align-items:center; gap:5px; border-radius:999px; padding:2px 9px; font-size:10.5px; font-weight:800; margin-right:6px; }
+  .bstatus.feita { background:#12261e; border:1px solid #2f7a2a; color:#7ee787; }
+  .bstatus.pend { background:#2a2314; border:1px solid #7a6848; color:#ffd86b; }
 
   /* ---------- FARM OP ---------- */
   .farmOp { margin:0 0 28px; background:linear-gradient(135deg,#1a160e,#161310); border:2px solid #7a6848; border-radius:14px; padding:18px 18px 14px; }
@@ -1083,12 +1097,12 @@ document.querySelectorAll('#viewRunes .node').forEach(g=>{
  centers[g.dataset.id]=[parseFloat(m[1])+32,parseFloat(m[2])+32];
  g.addEventListener('click',()=>toggle(g.dataset.id));
 });
-function skey(){return 'tbh_site_rota_v2_'+cur}
-function save(){localStorage.setItem(skey(),JSON.stringify(pickedArr[cur]))}
+function rkey(i){return 'tbh_site_rota_v3_'+i+'_'+encodeURIComponent((B.urls&&B.urls[i])||'')}
+function save(){localStorage.setItem(rkey(cur),JSON.stringify(pickedArr[cur]))}
 function loadRoute(i){
  while(pickedArr.length<=i)pickedArr.push([]);
-  let v=null;try{v=JSON.parse(localStorage.getItem('tbh_site_rota_v2_'+i)||'null')}catch(e){}
- pickedArr[i]=(v&&v.length!==undefined)?v:((B.ideals[i]&&B.ideals[i].length?B.ideals[i]:B.presets.farm||[]).map(String));
+  let v=null;try{v=JSON.parse(localStorage.getItem(rkey(i))||'null')}catch(e){}
+ pickedArr[i]=(v&&v.length)?v.map(String):((B.ideals[i]&&B.ideals[i].length?B.ideals[i]:B.presets.farm||[]).map(String));
  part=0;renderR();
 }
 function toggle(id){const p=pickedArr[cur];const i=p.indexOf(id);if(i>=0)p.splice(i,1);else p.push(id);part=0;renderR();}
@@ -1624,7 +1638,14 @@ def main() -> None:
         svg = strip_routeline(svg)
         svg = inject_hero_pics(svg)
 
-        ideal = ta.compute_ideal_route(mp, runes, costs, build.get("category", ""), build.get("notes", ""))
+        # prioridades de stats DA BUILD (sec priority) — a rota de runas fica ideal POR BUILD
+        _prio = []
+        for _sec_p in build.get("sections", []):
+            for _p in (_sec_p.get("priority") or []):
+                _pt = str(_p).strip()
+                if _pt and _pt.lower() not in [x.lower() for x in _prio]:
+                    _prio.append(_pt)
+        ideal = ta.compute_ideal_route(mp, runes, costs, build.get("category", ""), build.get("notes", ""), priority=_prio)
 
         rows, hero_blocks = build_step_rows(matched, data, save_state_pre if save_state_pre else None)
         has_unknown = any(s["kind"] == "desconhecida" for sec in matched for s in sec["steps"])
@@ -1685,12 +1706,20 @@ def main() -> None:
         else:
             orig_links = f'<a href="{esc(base_url)}" target="_blank" onclick="event.stopPropagation()">ver original</a>'
         # aba UPAR JÁ: plano da conta atribuída vs. alvos desta build
+        status_chip = ""
         _uw = '<div class="upempty">Esta build não tem conta atribuída (|user=) — o plano de upgrades é por conta.</div>'
         if _tr and tag_user and _saves.get(tag_user):
             try:
-                _plano = _tr.plano_completo(_saves[tag_user], _alvos_da_build(build))
-                _uw = '<div class="uphead">' + esc(tag_user) + ' · ' + esc(_plano.get("resumo", "")) + '</div>' \
-                    + _tr.aba_up_html(_plano, tag_user)
+                _plano = _tr.plano_completo(_saves[tag_user], _alvos_da_build(build, ideal))
+                _uw = ('<div class="uphead">📌 DESTA BUILD: <b>' + esc(build['title']) + '</b>'
+                       '<br><span style="font-weight:400">' + esc(tag_user) + ' · '
+                       + esc(_plano.get("resumo", "")) + ' · equipa: ' + esc(' + '.join(heroes)) + '</span></div>'
+                       + _tr.aba_up_html(_plano, tag_user))
+                _n_pend = len(_plano.get("skills") or [])
+                if _n_pend == 0:
+                    status_chip = '<span class="bstatus feita">\u2713 BUILD FEITA</span>'
+                else:
+                    status_chip = '<span class="bstatus pend">\u26a1 ' + str(_n_pend) + ' por fazer</span>'
             except Exception as _e2:
                 _uw = '<div class="upempty">Plano indisponível: ' + esc(str(_e2)[:80]) + '</div>'
         uw_containers.append(_uw)
@@ -1698,7 +1727,7 @@ def main() -> None:
         # alvos desta build em cache (para o monitor refrescar a aba UPAR JÁ sem refetch)
         try:
             _alvos_c = _tr._alvos_cache_load()
-            _alvos_c[str(i)] = {"conta": tag_user, "alvos": _alvos_da_build(build)}
+            _alvos_c[str(i)] = {"conta": tag_user, "alvos": _alvos_da_build(build, ideal)}
             _tr._alvos_cache_save(_alvos_c)
         except Exception:
             pass
@@ -1733,7 +1762,7 @@ def main() -> None:
             f'<div class="cnum">{i + 1}</div>'
             f'<div class="cmain">'
             f'<div class="ctitle">{esc(build["title"])}</div>'
-            f'<div class="cmeta">{cat_chip}{n_skills} skills · {len(heroes)} heroi{"s" if len(heroes) != 1 else ""} · {orig_links}</div>'
+            f'<div class="cmeta">{cat_chip}{status_chip}{n_skills} skills · {len(heroes)} heroi{"s" if len(heroes) != 1 else ""} · {orig_links}</div>'
             f'{user_tags}'
             f'</div>'
             f'<div class="cheroes">{figs}</div>'
@@ -1804,7 +1833,7 @@ def main() -> None:
     doc = """<!DOCTYPE html>
 <html lang="pt"><head><meta charset="utf-8">
 <title>Taskbar Hero — As Minhas Builds</title>
-<style>__CSS__</style></head>
+<style>__CSS__</style><style>#visitasPanel{position:fixed;bottom:22px;right:22px;z-index:40;background:#1d1913;border:1px solid #a89878;border-radius:10px;padding:10px 12px;min-width:160px;font-size:12px;color:#a89878;box-shadow:0 4px 14px rgba(0,0,0,.45)}#visitasPanel .vp-head{display:flex;align-items:center;gap:6px;margin-bottom:6px;color:#ffd86b;font-weight:600}#visitasPanel .vp-dot{width:8px;height:8px;border-radius:50%;background:#7ee787;box-shadow:0 0 6px #7ee787}#visitasPanel .vp-row{display:flex;justify-content:space-between;gap:14px;padding:2px 0}#visitasPanel .vp-row b{color:#f0e6cc}#visitasPanel a{margin-left:auto;color:#7ee787;text-decoration:none;border:1px solid #7ee787;border-radius:6px;padding:1px 6px;font-size:11px;line-height:1.4}#visitasPanel a:hover{background:#7ee787;color:#0d2a0d}</style></head>
 <body>
 
 <div id="home">
@@ -1871,11 +1900,63 @@ def main() -> None:
   </div>
 </div>
 
+<div id="visitasPanel">
+  <div class="vp-head"><span class="vp-dot"></span>Visitas<a id="tbhGithub" href="https://github.com/SEU-USER/tbh" target="_blank" rel="noopener" title="Repositorio no GitHub">GitHub</a></div>
+  <div class="vp-row"><span>Visitas</span><b id="vpTotal">-</b></div>
+  <div class="vp-row"><span>Online agora</span><b id="vpOnline">-</b></div>
+  <div class="vp-row"><span>IPs</span><b id="vpIps">-</b></div>
+</div>
 <div id="toast" class="hidden"></div>
 <div id="dropMapModal" class="hidden"><div class="dmmask"></div><div class="dmbox"><div class="dmhead"><h3 id="dmTitle">Onde dropa</h3><button class="dmclose" type="button" onclick="closeDropMap()">✕ fechar</button></div><p class="dmsub">Mapa igual ao do jogo. A <b style="background:#35c93a;color:#0d2a0d;border-radius:4px;padding:0 4px;">bola pintada de verde</b> \u00e9 o andar onde este item dropa. Segue o passo a passo acima e entra no andar indicado. Passa o rato nas bolas para ver n\u00edvel e ondas.</p><div id="dmHint"></div><div id="dmMap"></div><div id="dmLinks" class="dm-toplinks"></div><div class="dstages"><table><thead><tr><th>Zona</th><th>Andar (PT)</th><th>Andar (EN)</th><th>nv</th><th>Dificuldade</th><th>Ondas</th><th>Ba\u00fas / taxa</th></tr></thead><tbody id="dmStagesBody"></tbody></table></div><p class="dmtip">Fonte: <code>data/tbhdata/tbhStages.js</code> (189 stages reais do jogo) + <code>assets/maps/Act*_Bg.png</code> (extra\u00eddo do jogo via UnityPy, id\u00eantico \u00e0 wiki). Caixas: <code>910xxx</code> Monstro \u00b7 <code>920xxx</code> Boss \u00b7 Peste <code>915xxx/925xxx</code>. Taxa baixa = mais ba\u00fas/hora. Tip: na Peste foca andar 15-20. Posi\u00e7\u00f5es do ponto dourado em <code>assets/maps/positions.json</code> (ajust\u00e1vel).</p></div></div>
 
 <script>
 __JS__
+</script>
+<script>
+(function(){
+  var VB_URL = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin + '/api/visitas' : 'http://localhost:8765/api/visitas';
+  function vbDid(){
+    try{
+      var d = localStorage.getItem('tbh_did');
+      if(d) return d;
+      d = 'dev-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
+      localStorage.setItem('tbh_did', d);
+      return d;
+    }catch(e){ return 'dev-anon'; }
+  }
+  function vbRender(s){
+    var el;
+    if(s){
+      if((el = document.getElementById('vpTotal'))) el.textContent = s.total_visitas;
+      if((el = document.getElementById('vpOnline'))) el.textContent = s.online_agora;
+      if((el = document.getElementById('vpIps'))) el.textContent = s.ips_online;
+    }
+  }
+  function vbSend(ev){
+    try{
+      fetch(VB_URL, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({device:vbDid(), event:ev})})
+        .then(function(r){ return r.json(); })
+        .then(function(j){ if(j && j.stats) vbRender(j.stats); })
+        .catch(function(){});
+    }catch(e){}
+  }
+  function vbRefresh(){
+    try{
+      fetch(VB_URL).then(function(r){ return r.json(); }).then(function(s){ vbRender(s); }).catch(function(){});
+    }catch(e){}
+  }
+  var vbLink = document.getElementById('tbhGithub');
+  if(vbLink){
+    vbLink.addEventListener('click', function(e){
+      e.preventDefault();
+      vbSend('github_click');
+      window.open(vbLink.href, '_blank');
+    });
+  }
+  vbSend('visit');
+  setInterval(function(){ vbSend('ping'); }, 45000);
+  setInterval(vbRefresh, 30000);
+})();
 </script>
 </body></html>"""
 

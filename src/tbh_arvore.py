@@ -351,37 +351,12 @@ def render_build_svg(matched: list, data: dict, save_state: dict = None) -> str:
                         cls_under = "off"
                         cls_glow = None
                     else:
-                        if save_state is not None:
-                            if atual >= (alvo or 0):
-                                tip = tip_base + f' · \u2713 FEITO {atual}/{alvo}'
-                                sub = f'\u2713 {atual}/{alvo} FEITO'
-                                cls_sq = "done"
-                                cls_under = "done"
-                                cls_glow = "done"
-                            elif _locked:
-                                tip = tip_base + f' · \U0001F512 BLOQUEADA T{ti+1} (sobe her\u00f3i)'
-                                sub = f'\U0001F512 T{ti+1} bloqueada'
-                                cls_sq = "locked"
-                                cls_under = "locked"
-                                cls_glow = None
-                            elif atual > 0:
-                                tip = tip_base + f' · {atual}\u2192{alvo} (falta {alvo-atual})'
-                                sub = f'{atual}\u2192{alvo}/{maxlvl}'
-                                cls_sq = "partial"
-                                cls_under = "partial"
-                                cls_glow = "partial"
-                            else:
-                                tip = tip_base + f' · \u2192{alvo} por fazer'
-                                sub = f'\u2192 {alvo}/{maxlvl}'
-                                cls_sq = "todo"
-                                cls_under = "todo"
-                                cls_glow = "todo"
-                        else:
-                            tip = tip_base
-                            sub = f'\u2192 nv {alvo}/{maxlvl}'
-                            cls_sq = "used"
-                            cls_under = "gold"
-                            cls_glow = "gold"
+                        # estado feito/por fazer vive na pagina UPAR JÁ — a build mostra so o alvo
+                        tip = tip_base
+                        sub = f'\u2192 nv {alvo}/{maxlvl}'
+                        cls_sq = "used"
+                        cls_under = "gold"
+                        cls_glow = "gold"
                 else:
                     info = data["actives"].get(pid)
                     if not info:
@@ -402,37 +377,12 @@ def render_build_svg(matched: list, data: dict, save_state: dict = None) -> str:
                         cls_under = "off"
                         cls_glow = None
                     else:
-                        if save_state is not None:
-                            if atual >= (alvo or 0):
-                                tip = tip_base + f' \u00b7 \u2713 FEITO {atual}/{alvo}'
-                                sub = f'\u2713 {atual}/{alvo} FEITO'
-                                cls_sq = "done"
-                                cls_under = "done"
-                                cls_glow = "done"
-                            elif _locked:
-                                tip = tip_base + f' \u00b7 \U0001F512 BLOQUEADA T{ti+1} (sobe her\u00f3i)'
-                                sub = f'\U0001F512 T{ti+1} bloqueada'
-                                cls_sq = "locked"
-                                cls_under = "locked"
-                                cls_glow = None
-                            elif atual > 0:
-                                tip = tip_base + f' \u00b7 {atual}\u2192{alvo} (falta {alvo-atual})'
-                                sub = f'{atual}\u2192{alvo}/{maxlvl}'
-                                cls_sq = "partial"
-                                cls_under = "partial"
-                                cls_glow = "partial"
-                            else:
-                                tip = tip_base + f' \u00b7 \u2192{alvo} por fazer'
-                                sub = f'\u2192 {alvo}/{maxlvl}'
-                                cls_sq = "todo"
-                                cls_under = "todo"
-                                cls_glow = "todo"
-                        else:
-                            tip = tip_base
-                            sub = f'\u2192 nv {alvo}/{maxlvl}'
-                            cls_sq = "used"
-                            cls_under = "gold"
-                            cls_glow = "gold"
+                        # estado feito/por fazer vive na pagina UPAR JÁ — a build mostra so o alvo
+                        tip = tip_base
+                        sub = f'\u2192 nv {alvo}/{maxlvl}'
+                        cls_sq = "used"
+                        cls_under = "gold"
+                        cls_glow = "gold"
                 parts.append(f'<title>{esc(tip)}</title>')
                 if cls_glow:
                     parts.append(f'<rect x="-6" y="-6" width="76" height="76" rx="19" class="glow {cls_glow}"/>')
@@ -556,6 +506,37 @@ def walk_route(mp: dict, root: int, ordered: list) -> list:
     return route
 
 
+def walk_route_contig(mp: dict, root: int, ranked: list) -> list:
+    """Rota SEM SALTOS: cada passo e um no ADJACENTE aos ja escolhidos (no jogo so
+    desbloqueias runas vizinhas), priorizando a ordem `ranked` — cobre TODOS os nos
+    (nem uma runa fica de fora) sem a linha do mapa a saltar de ramo para ramo."""
+    nodes = {int(k): v for k, v in mp["nodes"].items()}
+    adj = collections.defaultdict(set)
+    for a, b in mp["edges"]:
+        if a in nodes and b in nodes:
+            adj[a].add(b)
+            adj[b].add(a)
+    if root not in nodes:
+        root = min(nodes)
+    rank = {nid: i for i, nid in enumerate(ranked)}
+    todos = set(nodes)
+    todos.discard(root)
+    route = [root]
+    last = root
+    frontier = set(adj[root]) & todos
+    while frontier:
+        nxt = min(frontier, key=lambda n: (0 if n in adj[last] else 1, rank.get(n, 10 ** 9), n))
+        route.append(nxt)
+        frontier.discard(nxt)
+        todos.discard(nxt)
+        frontier |= (adj[nxt] & todos)
+        last = nxt
+    # seguranca: nos isolados vao no fim pela ordem de prioridade
+    for nid in sorted(todos, key=lambda n: rank.get(n, 10 ** 9)):
+        route.append(nid)
+    return route
+
+
 def compute_route_presets(mp: dict, runes: dict, costs: dict) -> dict:
     nodes = {int(k) for k in mp["nodes"]}
     root = 1 if 1 in nodes else min(nodes)
@@ -594,7 +575,7 @@ def compute_route_presets(mp: dict, runes: dict, costs: dict) -> dict:
     return presets
 
 
-def compute_ideal_route(mp: dict, runes: dict, costs: dict, category: str = "", notes: str = "") -> list:
+def compute_ideal_route(mp: dict, runes: dict, costs: dict, category: str = "", notes: str = "", priority: list = None) -> list:
     nodes = {int(k) for k in mp["nodes"]}
     root = 1 if 1 in nodes else min(nodes)
 
@@ -622,6 +603,11 @@ def compute_ideal_route(mp: dict, runes: dict, costs: dict, category: str = "", 
     boss_early = "boss" in text and "act" in text
 
     tiers = []
+    # stats pedidas pela build (sec "priority"), pela ordem do guia — a rota fica POR BUILD
+    for _p in (priority or []):
+        _pl = str(_p).strip().lower()
+        if _pl:
+            tiers.append([lambda s, _pl=_pl: _pl in s])
     tiers.append([lambda s: "wave" in s])
     tiers.append([lambda s: "skill slot" in s])
     tiers.append([lambda s: "move speed" in s])
@@ -656,7 +642,7 @@ def compute_ideal_route(mp: dict, runes: dict, costs: dict, category: str = "", 
             done.add(nid)
     leftovers = sorted((nid for nid in nodes if nid not in done), key=cost)
     ranked += leftovers
-    return walk_route(mp, root, ranked)
+    return walk_route_contig(mp, root, ranked)
 
 
 def esc_html(s: str) -> str:

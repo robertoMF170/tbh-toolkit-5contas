@@ -17,8 +17,8 @@ goto inicio
 
 :ajuda
 echo Uso: run.bat [--forcar]
-echo   sem args  - modo normal: gera o site completo e (se existirem os
-echo               modulos locais) verifica sandboxes e inicia o ciclo 15 min
+echo   sem args  - modo normal: confirma os saves vs Steam Cloud, gera o site
+echo               e (se existirem os modulos locais) faz login e inicia o ciclo
 echo   --forcar  - forca arranque de TODAS as sandboxes mesmo que parecam
 echo               a correr (so se src\abrir_steam.py existir)
 echo   run.bat e o UNICO arranque - legados em scripts/ chamam este
@@ -32,11 +32,11 @@ echo ============================================================
 echo  Estrutura: run.bat + minhas_builds.html + inventario.html na RAIZ
 echo             src/ (codigo), assets/ (icons), config/ (baus/builds), data/tbhdata, var/ (cache)
 echo  O que este RUN faz (tudo em 1):
-echo   1) gera site completo: builds + baus + farm + mapa + UPAR JA
-echo      - farm em baixo horizontal (texto todo visivel)
-echo      - filtros: Equilibrio / Mais caros / Mais facil vender / Mais facil drop
+echo   1) confirma os saves vs Steam Cloud ANTES de arrancar contas
+echo      - backup automatico + nao deixa sobrescrever a cloud com save velho
+echo   2) gera site completo: builds + baus + farm + mapa + UPAR JA
 echo      - ver mapa estilo jogo: bolas alinhadas, boss vermelho, bola pintada onde farmar
-echo   2) se existirem os modulos locais: sandboxes + ciclo farm 15 min
+echo   3) se existirem os modulos locais: sandboxes + ciclo farm 15 min
 echo      - modulos ausentes sao saltados automaticamente (versao publica)
 echo ============================================================
 echo.
@@ -46,48 +46,85 @@ if /I "%~1"=="--forcar" set FORCAR=--forcar
 if /I "%~1"=="--forçar" set FORCAR=--forcar
 if /I "%~1"=="--force" set FORCAR=--forcar
 
-if not defined TEM_STEAM goto sem_steam
+if not defined TEM_STEAM goto sem_steam_1
 
-echo [1/4] Estado das sandboxes (SbieSvc + logins)...
+echo [1/5] Estado das sandboxes (SbieSvc + logins)...
 python -X utf8 src\abrir_steam.py --estado
 echo.
+goto sync
+
+:sem_steam_1
+echo [1/5] src\abrir_steam.py ausente (versao publica) — sandboxes SALTADAS.
+echo.
+
+:sync
+if not exist src\tbh_sync.py goto sem_sync
+echo [2/5] A confirmar saves vs Steam Cloud (anti-perda de dados)...
+python -X utf8 src\tbh_sync.py --pre
+if errorlevel 3 goto fim
+if errorlevel 2 goto sync_erro
+if errorlevel 1 (
+  echo  AVISO: houve divergencias de saves - decisao tomada acima.
+)
+echo.
+goto login_pergunta
+
+:sync_erro
+echo.
+echo        [ERRO] Ha contas SEM save utilizavel (ve acima) - arrancar agora
+echo        pode sobrescrever a Steam Cloud e PERDER progresso!
+choice /C SN /N /M "  [S]im = continuar mesmo assim   [N]ao = parar agora: "
+if errorlevel 2 goto fim
+echo.
+goto login_pergunta
+
+:sem_sync
+echo [2/5] src\tbh_sync.py ausente — verificacao de saves SALTADA.
+echo.
+
+:login_pergunta
+if not defined TEM_STEAM goto sem_steam_2
 
 REM --- Prompt Y/S para login (farm fica desligado por defeito) ---
 if defined FORCAR goto forcar_login
 
-echo Quer fazer login das contas?
+echo [3/5] Quer fazer login das contas?
 choice /C YS /N /T 15 /D S /M "  [Y]es = abrir sandboxes   [S]altar = saltar (padrao S em 15s): "
 if errorlevel 2 goto skip_login
 if errorlevel 1 goto do_login
 
 :do_login
 echo.
-echo [2/4] A abrir sandboxes em falta (se ja ativa, salta sozinha)...
+echo [3/5] A abrir sandboxes em falta (se ja ativa, salta sozinha)...
 echo       Se alguma ficar AMBIGUA (pid mudou / login nao visto) vai perguntar [S]altar / [L]ogar
-python -X utf8 src\abrir_steam.py --todas
+python -X utf8 src\abrir_steam.py --todas --debug
+if errorlevel 1 (
+  echo  [ERRO] alguma conta nao abriu o jogo - detalhes em var\abrir_steam.log
+)
 goto pos_login
 
 :forcar_login
-echo [2/4] A abrir TODAS as sandboxes (FORCAR — ignora deteccao)...
-python -X utf8 src\abrir_steam.py --todas --forcar
+echo [3/5] A abrir TODAS as sandboxes (FORCAR — ignora deteccao)...
+python -X utf8 src\abrir_steam.py --todas --forcar --debug
+if errorlevel 1 (
+  echo  [ERRO] alguma conta nao abriu o jogo - detalhes em var\abrir_steam.log
+)
 goto pos_login
 
 :skip_login
 echo.
-echo [2/4] Login das contas SALTADO (S) — sem abrir sandboxes.
+echo [3/5] Login das contas SALTADO (S) — sem abrir sandboxes.
 echo       Sandboxes deixadas como estao — o ciclo 15min continua a ler saves locais na mesma.
 goto pos_login
 
-:sem_steam
-echo [1/4] src\abrir_steam.py ausente (versao publica) — sandboxes SALTADAS.
-echo [2/4] Login das contas SALTADO — modulo local ausente.
-echo.
+:sem_steam_2
+echo [3/5] Login das contas SALTADO — modulo local ausente.
 
 :pos_login
 if defined TEM_STEAM echo       Sandboxes prontas (ativas saltadas / saltadas por S / lancadas).
 echo.
 
-echo [3/4] A gerar minhas_builds.html (builds perfeitas sincronizadas com SAVE)...
+echo [4/5] A gerar minhas_builds.html (builds perfeitas sincronizadas com SAVE)...
 python -X utf8 -u src\tbh_site.py --sem-abrir
 if errorlevel 1 (
   echo  ERRO ao gerar builds - nova tentativa em 5s...
@@ -113,6 +150,20 @@ if errorlevel 1 (
 echo.
 
 :sem_baus
+rem --- Servidor de visitas (estatisticas do painel #visitasPanel) ---
+netstat -ano | findstr /C:":8765 " | findstr /C:"LISTENING" >nul 2>&1
+if errorlevel 1 (
+  if exist "%~dp0src\tbh_visitas.py" (
+    echo  A arrancar servidor de visitas em http://localhost:8765 ...
+    start "tbh-visitas" /min python -X utf8 "%~dp0src\tbh_visitas.py" --root "%~dp0" --db "%~dp0var\visitas.json"
+    timeout /t 1 /nobreak >nul
+  ) else (
+    echo  aviso: src\tbh_visitas.py ausente - painel de visitas sem dados ao vivo.
+  )
+) else (
+  echo  Servidor de visitas ja ativo na porta 8765 - nada a fazer.
+)
+echo.
 if exist "%~dp0minhas_builds.html" (
   echo  A abrir dashboard no browser...
   start "" "%~dp0minhas_builds.html"
@@ -122,7 +173,7 @@ if exist "%~dp0minhas_builds.html" (
 echo.
 
 if not defined TEM_BAUS goto sem_monitor
-echo [4/4] A iniciar CICLO ESTAVEL 15 min
+echo [5/5] A iniciar CICLO ESTAVEL 15 min
 echo       leve a cada 2 min (saves locais - baus/progresso/UPAR JA/inventario)
 echo       completo a cada 15 min (regenera builds SKILLS/RUNAS sincronizadas)
 echo       log: var\baus_monitor.log  - deixa esta janela ABERTA durante o farm
@@ -135,13 +186,14 @@ python -X utf8 -u src\tbh_baus.py --monitor 15
 echo.
 echo [AVISO] Monitor saiu (codigo %errorlevel%). Reinicia em 30s...
 echo Fecha esta janela agora se queres parar de vez.
-timeout /t 30 /nobreak
-if errorlevel 1 goto fim
+rem espera a prova de cliques: 'timeout' devolve errorlevel 1 com um clique na
+rem janela (QuickEdit) e fechava o run; 'ping' nao le o teclado/rato e nao falha
+ping -n 31 127.0.0.1 >nul
 echo A reiniciar ciclo...
 goto loop
 
 :sem_monitor
-echo [4/4] Modulo de baus/farm ausente (versao publica) — monitor SALTADO.
+echo [5/5] Modulo de baus/farm ausente (versao publica) — monitor SALTADO.
 echo       O site foi gerado e aberto no browser. Podes fechar esta janela.
 echo ============================================================
 
