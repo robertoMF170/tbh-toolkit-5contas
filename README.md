@@ -1,87 +1,89 @@
-# TaskBarHero Toolkit — 5 Contas via Sandboxie
+# Taskbar Hero Toolkit
 
-> Oficina para quem joga **TaskBarHero** a sério: **5 contas isoladas via Sandboxie**, leitura de saves `.es3`, gestão de **baús** (`baus.json/history/cache`), **builds** (`tbhindex.com`), análise de **pixels** (mss + layered windows) e extractor de sprites.
+Ferramenta completa para o jogo **Taskbar Hero**: gera uma dashboard local com **builds** (skills + mapa de runas), **farm OP** do dia, **mapa de drops estilo jogo**, recomendações **UPAR JÁ**, **inventário** vendável e gestão de **baús**.
 
-![Sandboxie](https://img.shields.io/badge/Sandboxie-5_contas-yellow) ![TBH](https://img.shields.io/badge/TaskBarHero-toolkit-blue) ![MSS](https://img.shields.io/badge/mss-pixel--capture-black) ![Python](https://img.shields.io/badge/Python-tooling-green)
+Tudo corre localmente em Python — sem contas, sem chaves e sem dados pessoais.
 
-## O que faz
+## Uso rápido (único arranque)
 
-- **5 contas** (`geek1781, opiratanumero1, robert33o, RobertoMF998, xrobs`) isoladas em `Sandbox\Robs\*\user\current\AppData\LocalLow\TesseractStudio\TaskbarHero` — cada save `SaveFile_Live.es3` separado.
-- **Baús** em `baus.json / baus_history.json / baus_cache.json` com monitor de lock + alerts (**min 0.8 / 1 dia**), import via `baus_para_importar/`.
-- **Builds** em `builds.json` (`tbhindex.com/252/324/338` + mixes `214+153`).
-- **`analyze_tbh.py`**: `EnumWindows` de `taskbarhero.exe`, `GetWindowRect` + flags `WS_EX_LAYERED / WS_EX_TRANSPARENT` + **mss** screenshot para **% pixels pretos**.
-- Extractors `extract_chars / passivos / sprites` + `icons/sprites` por tier + `_farm_preview.html`.
-
-## Como funciona
-
-```
-5× Sandboxie (Robs\*) ─► SaveFile_Live.es3 por conta ─┬─► baus.json/history/cache (monitor lock, alert 0.8/1d)
-                                                      ├─► builds.json (tbhindex.com)
-                                                      ├─► analyze_tbh.py (EnumWindows + WS_EX_LAYERED/TRANSPARENT + mss → % pretos)
-                                                      └─► extract_{chars,passivos,sprites}.py → icons/ + _farm_preview.html
+```bat
+run.bat              :: gera o site completo e abre o dashboard no browser
+run.bat --forcar     :: (só com módulos locais) força arranque de todas as sandboxes
 ```
 
-## Stack
+O `run.bat` é o **único** arranque — os atalhos legados em `scripts/` apenas chamam este. Sem os módulos locais opcionais, o run gera apenas o site e abre o dashboard (a versão pública funciona assim).
 
-Sandboxie, Python, mss, numpy, win32 (pywin32), Pillow, TaskBarHero (.es3)
+Também podes correr diretamente:
 
-## Passo a passo — instalar e usar
-
-```bash
-# 1. Clone
-git clone https://github.com/robertoMF170/tbh-toolkit-5contas.git
-cd tbh-toolkit-5contas
-
-# 2. Sandboxie
-# Instala Sandboxie-Plus → cria boxes: geek1781, opiratanumero1, robert33o, RobertoMF998, xrobs
-# Instala Steam + TaskBarHero dentro de cada box
-
-# 3. Ambiente (análise)
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-# Reqs: mss, numpy, pillow, pywin32
-
-# 4. Lançar contas
-abrir_conta1.bat   # → geek1781
-abrir_conta2.bat   # → opiratanumero1
-abrir_conta3.bat   # → robert33o
-abrir_conta4.bat   # → RobertoMF998
-abrir_conta5.bat   # → xrobs
-# ou
-python abrir_steam.py --conta 1
-
-# 5. Analisar
-python analyze_tbh.py
-# → lista janelas taskbarhero.exe + % pixels pretos (via mss)
-
-# 6. Baús e builds
-# Edita baus.json (ou importa de baus_para_importar/)
-# Edita builds.json (ou usa tbhindex.com → export)
-# Abre _farm_preview.html no browser para pré-visualizar
+```bat
+python src\tbh_site.py        :: gera minhas_builds.html e inventario.html
 ```
+
+## Instalação
+
+1. **Python 3.10+** em Windows (testado em 3.14).
+2. Copia `config/builds.example.json` para `config/builds.json` e ajusta as tuas builds (URLs do `tbhindex.com`).
+3. Corre `python src\tbh_site.py` (ou `run.bat`).
+4. Abre `minhas_builds.html` no browser.
+
+## O que a dashboard dá
+
+- **SKILLS DO HEROI** — árvore de skills de cada build com a ordem de up.
+- **MAPA DE RUNAS** — rota ideal pela árvore global de 241 runas.
+- **FARM OP** (em baixo, horizontal) — filtros *Equilíbrio / Mais caros / Mais fácil vender / Mais fácil drop* e coluna *Dropa em* (zona + dificuldade).
+- **Ver no mapa** — mapa estilo jogo, "para burros": em cima o **modo** e o **lugar do item**, passo a passo (Portal → modo → ato → andar) e a **bola pintada de verde** exatamente onde farmar; nas **Terras da Peste** mostra o **nível** e o **andar** (1–20).
+- **UPAR JÁ** — recomendações de progressão ligadas às builds.
+- **Inventário / baús** — ativos quando os módulos locais opcionais existem.
 
 ## Estrutura
 
 ```
-baus.json / baus_history.json / baus_cache.json
-baus_para_importar/          # imports de baús
-builds.json                  # builds (252/324/338 + mixes)
-analyze_tbh.py               # EnumWindows + WS_EX_LAYERED/TRANSPARENT + mss
-extract_chars.py
-extract_passivos.py
-extract_sprites.py
-abrir_conta1..5.bat
-abrir_steam.py
-icons*/ sprites*
-_farm_preview.html
+run.bat                → único arranque (usa SEMPRE este)
+minhas_builds.html     → dashboard gerado (builds + farm + mapa)
+inventario.html        → inventário vendável (gerado)
+
+src/                   → código Python
+  tbh_site.py          → gerador da dashboard (ver mapa, farm em baixo, filtros)
+  tbh_arvore.py        → árvore de skills
+  tbh_mapa.py          → mapa de runas e assets/maps/
+  tbh_farm.py          → farm OP (top híbrido/baleias/líquidos + Dropa em)
+  tbh_recomendar.py    → motor UPAR JÁ
+  tbh_inventario.py    → inventário a partir do save .es3
+  tbh_sieve.py         → scraping opcional (usesieve.com)
+  tbh_protocol.py      → protocolo tbh://
+
+assets/                → icons, icons_chars, icons_hero, icons_passivos, maps/
+config/                → builds.example.json (copia para builds.json), .env.example
+data/tbhdata/          → dados do jogo (stages, runas, skills, preços)
+var/                   → caches e logs gerados
+scripts/               → atalhos sieve_* (os restantes .bat são locais, opcionais)
+tests/                 → test_tbh_sieve.py
 ```
 
-## Avisos SrRobs
+O código procura primeiro na estrutura nova (`config/`, `data/tbhdata/`, `assets/`, `var/`) com **fallback** para a raiz, por isso nada quebra ao migrar.
 
-- Cada caixa Sandboxie tem o seu `SaveFile_Live.es3` — não mistures saves entre contas.
-- `analyze_tbh.py` precisa da janela visível (não minimizada) para o mss capturar correto.
+## Módulos opcionais (versão local)
 
-## Autor
+`src/abrir_steam.py` e `src/tbh_baus.py` não fazem parte da versão pública (automação de sandboxes e leitura de saves). O `run.bat` e os `scripts/` detetam a ausência e saltam essas secções automaticamente — o site continua a ser gerado na mesma.
 
-Roberto Marques (SrRobs)
+Os teus dados (contas, saves `.es3`, `config/builds.json`, caches) ficam locais e estão no `.gitignore`.
+
+## SIEVE (opcional)
+
+Integração com `scrape.usesieve.com` em `src/tbh_sieve.py`. Sem chave não faz nada.
+
+```bat
+scripts\sieve_login.bat          :: ou: python src\tbh_sieve.py --login
+python src\tbh_sieve.py --iniciar "Extrai ..." --url https://quotes.toscrape.com
+scripts\sieve_seguir.bat         :: ou: python src\tbh_sieve.py --seguir
+```
+
+Coloca a chave em `config/.env` (ver `config/.env.example`).
+
+## Testes
+
+```bat
+python -m unittest tests.test_tbh_sieve -v
+:: ou tudo:
+python -m unittest discover -s tests
+```
