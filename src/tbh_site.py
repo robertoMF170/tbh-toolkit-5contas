@@ -1307,66 +1307,18 @@ window.farmSort=function(btn){
 function farmEscape(value){
   return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});
 }
-function farmAccountForButton(btn){
-  var conta=btn.getAttribute('data-conta')||'';
-  try{ if(!conta && typeof cur!=='number') cur=-1; if(!conta && cur>=0 && B.urls && B.urls[cur]){ var u=B.urls[cur]||''; var m=u.match(/\|user=([^|]+)/); if(m) conta=m[1]; } }catch(e){}
-  return conta;
-}
-function farmApi(action,name,conta){
-  if(!FARM_API_URL || !window.__TBH_FARM_API_TOKEN__ || window.__TBH_FARM_API_TOKEN__==='__TBH_FARM_API_TOKEN__'){
-    return Promise.reject(new Error('Abre a dashboard pelo run.bat para registar alertas sem permissões do browser.'));
-  }
-  var options={method:'GET',headers:{'X-TBH-Farm-Token':window.__TBH_FARM_API_TOKEN__},cache:'no-store'};
-  if(action){
-    options.method='POST';
-    options.headers['Content-Type']='application/json';
-    options.body=JSON.stringify({action:action,name:name,conta:conta||''});
-  }
-  return fetch(FARM_API_URL,options).then(function(response){
-    return response.json().then(function(data){
-      if(!response.ok||!data.ok) throw new Error(data.erro||'Não foi possível atualizar os alertas.');
-      return data;
-    });
-  });
-}
-function farmTargetMatchesButton(target,btn){
-  var name=(btn.getAttribute('data-farm')||'').trim().toLowerCase();
-  var targetName=String(target.name||'').trim().toLowerCase();
-  if(name!==targetName) return false;
-  var account=farmAccountForButton(btn).trim().toLowerCase();
-  var targetAccount=String(target.conta||'').trim().toLowerCase();
-  return !targetAccount || !account || targetAccount===account || account.endsWith('('+targetAccount+')');
-}
-function syncFarmButtons(w){
-  var targets=(w&&w.targets)||[];
-  document.querySelectorAll('.ffarmbtn').forEach(function(btn){
-    var active=targets.some(function(target){return farmTargetMatchesButton(target,btn);});
-    btn.classList.toggle('on',active);
-    btn.textContent=active?'🔔 A vigiar':'🎯 Vigiar item';
-    btn.title=active?'Este item está na lista de alertas. Clica para deixar de vigiar.':'Adicionar este item à lista de alertas, sem abrir janelas do browser.';
-  });
-}
 function farmAction(action,name,conta){
-  toast(action==='remove'?'A remover o alerta…':action==='ack'?'A confirmar o drop…':'A registar o item…');
+  var bar=document.getElementById('farmWatchBar');
+  if(bar){bar.classList.add('show');bar.textContent=action==='remove'?'A remover o alerta…':action==='ack'?'A confirmar o drop…':'A registar o item…';}
   return farmApi(action,name,conta).then(function(data){
-    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};
-    syncFarmButtons(window.__FARM_WATCH__);
-    renderFarmWatchBar(window.__FARM_WATCH__);
-    toast((data.message||'Lista de alertas atualizada.')+' O run.bat continua a vigiar em segundo plano.');
-    return data;
-  }).catch(function(error){
-    toast(error.message||'Não foi possível comunicar com a vigia local. Abre a dashboard pelo run.bat.');
-    throw error;
-  });
+    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};syncFarmButtons(window.__FARM_WATCH__);renderFarmWatchBar(window.__FARM_WATCH__);
+    toast((data.message||'Lista de alertas atualizada.')+' — o run.bat mantém a vigia ativa.');return data;
+  }).catch(function(error){if(bar){bar.classList.add('show');bar.textContent=error.message||'Não foi possível falar com o run.bat. Abre-o e volta a tentar.';}throw error;});
 }
 window.farmToggle=function(btn){
-  if(btn.dataset.busy==='1') return;
-  var name=btn.getAttribute('data-farm')||'';
-  if(!name) return;
-  var action=btn.classList.contains('on')?'remove':'add';
-  var conta=farmAccountForButton(btn);
-  btn.dataset.busy='1'; btn.disabled=true;
-  farmAction(action,name,conta).catch(function(){}).finally(function(){btn.dataset.busy='';btn.disabled=false;});
+  if(btn.dataset.busy==='1')return;var name=btn.getAttribute('data-farm')||'';if(!name)return;
+  btn.dataset.busy='1';btn.disabled=true;
+  farmAction(btn.classList.contains('on')?'remove':'add',name,farmAccountForButton(btn)).catch(function(){}).finally(function(){btn.dataset.busy='';btn.disabled=false;});
 };
 window.farmSortGlobal=function(btn){
   var mode=btn.getAttribute('data-sort');
@@ -1454,39 +1406,23 @@ function restoreFarmToSidebar(i){
 }
 function refreshFarmWatchBar(){
   if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__){
-    if(window.__FARM_WATCH__)renderFarmWatchBar(window.__FARM_WATCH__);
-    return;
+    renderFarmWatchBar(window.__FARM_WATCH__||{targets:[],hits:[]});return;
   }
-  farmApi().then(function(data){
-    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};
-    syncFarmButtons(window.__FARM_WATCH__);
-    renderFarmWatchBar(window.__FARM_WATCH__);
-  }).catch(function(){});
+  farmApi().then(function(data){window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};syncFarmButtons(window.__FARM_WATCH__);renderFarmWatchBar(window.__FARM_WATCH__);}).catch(function(){});
 }
 function renderFarmWatchBar(w){
-  var bar=document.getElementById('farmWatchBar');
-  if(!bar||!w) return;
-  var t=w.targets||[], h=(w.hits||[]).filter(x=>!x.acknowledged);
-  if(!t.length && !h.length){ bar.classList.remove('show'); bar.innerHTML=''; return; }
-  var html='<h4>🎯 FARM WATCH — <span style="color:#7ee787">'+t.length+' alvo(s)</span> · verifica de 2 em 2s no run.bat <button onclick="location.reload()" style="background:#241f18;color:#ffd86b;border:1px solid #7a6848;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;margin-left:8px;">↻ actualizar</button></h4>';
-  if(t.length){
-    html+='<div class="fw-tags">';
-    t.forEach(function(x){
-      var n=x.name||'?';
-      var c=x.conta?(' @ '+x.conta):' @ todas (deteta sozinho)';
-      var tip = x.conta ? ('vigia só '+x.conta) : 'vigia todas — quando dropar grava a conta real';
-      html+='<span class="fw-tag" title="'+tip.replace(/"/g,'&quot;')+'"><b>'+n.replace(/</g,'&lt;')+'</b><span style="color:#a89878">'+c.replace(/</g,'&lt;')+'</span> <button onclick="location.href=\'tbh://farm?rm='+encodeURIComponent(n)+'\'">✕ parar</button></span>';
-    });
-    html+='</div>';
-    html+='<div style="margin-top:6px;font-size:11px;color:#a89878;">Alvos em <code>var/farm_watch.json</code> — o <code>run.bat</code> lê os saves de 2 em 2 segundos e mostra popup quando encontrar o item (<span style="color:#ff9d9d">🔔 até confirmares OK</span>).</div>';
-  }
-  if(h.length){
-    h.slice(-3).forEach(function(hit){
-      html+='<div class="fw-hit">🔔 <b>'+(hit.name||'?').replace(/</g,'&lt;')+'</b> @ '+(hit.conta||'?').replace(/</g,'&lt;')+' ×'+(hit.qtd||1)+' — vai buscar! <button onclick="location.href=\'tbh://farm?ack='+encodeURIComponent(hit.name||'')+'\'">\u2705 OK parar alarme</button></div>';
-    });
-  }
-  bar.innerHTML=html;
-  bar.classList.add('show');
+  var bar=document.getElementById('farmWatchBar');if(!bar||!w)return;
+  var targets=w.targets||[],allHits=w.hits||[],pending=allHits.filter(function(hit){return !hit.acknowledged;});
+  if(!targets.length&&!pending.length){bar.classList.remove('show');bar.innerHTML='';return;}
+  var html='<h4>🎯 ALERTAS DE FARM — <span style="color:#7ee787">'+targets.length+' alvo(s)</span> · atualização automática</h4>';
+  if(targets.length){html+='<div class="fw-tags">';targets.forEach(function(target){
+    var name=String(target.name||'?'),account=String(target.conta||''),quantity=0;
+    allHits.forEach(function(hit){var wanted=account.trim().toLowerCase(),actual=String(hit.conta||'').trim().toLowerCase();if(String(hit.name||'').trim().toLowerCase()===name.trim().toLowerCase()&&(!wanted||actual===wanted||actual.endsWith('('+wanted+')')))quantity+=Math.max(0,parseInt(hit.qtd,10)||0);});
+    html+='<span class="fw-tag"><b>'+farmEscape(name)+'</b><span style="color:#a89878">'+farmEscape(account?' @ '+account:' @ todas')+' · '+quantity+' encontrada(s)</span><button type="button" data-farm-action="remove" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">Parar</button></span>';
+  });html+='</div>';}
+  pending.slice(-3).forEach(function(hit){var name=String(hit.name||'?'),account=String(hit.conta||'?');html+='<div class="fw-hit">🔔 <b>'+farmEscape(name)+'</b> @ '+farmEscape(account)+' ×'+(parseInt(hit.qtd,10)||1)+' — drop encontrado <button type="button" data-farm-action="ack" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">✓ Confirmar</button></div>';});
+  html+='<div style="margin-top:6px;font-size:11px;color:#a89878;">O run.bat verifica os saves de 2 em 2 segundos em segundo plano. Não precisas de autorizar pop-ups do browser.</div>';
+  bar.innerHTML=html;bar.querySelectorAll('[data-farm-action]').forEach(function(button){button.addEventListener('click',function(){button.disabled=true;farmAction(button.dataset.farmAction,button.dataset.name,button.dataset.conta).catch(function(){}).finally(function(){button.disabled=false;});});});bar.classList.add('show');
 }
 function refreshFarmWatchBar(){
   if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__){

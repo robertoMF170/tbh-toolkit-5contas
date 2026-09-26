@@ -21,6 +21,8 @@ import ipaddress
 import json
 import os
 import secrets
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -203,6 +205,21 @@ def executar_acao_farm(pedido: dict) -> dict:
     }
 
 
+def gerar_builds(root: str) -> bool:
+    """Regenerate the builds dashboard in a child process."""
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tbh_site.py")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-X", "utf8", script, "--sem-abrir"],
+            cwd=os.path.abspath(root),
+            timeout=300,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 # ---------------------------------------------------------------------------
 # servidor
 # ---------------------------------------------------------------------------
@@ -292,7 +309,15 @@ class VisitasHandler(BaseHTTPRequestHandler):
     # -- rotas -------------------------------------------------------------
     def do_GET(self):  # noqa: N802
         rota = self.path.split("?", 1)[0]
-        if rota == "/api/health":
+        if rota == "/api/open":
+            if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                self._json({"ok": False, "erro": "Abertura permitida apenas neste computador."}, 403)
+                return
+            if not generate_farm_dashboard():
+                self._json({"ok": False, "erro": "Nao foi possivel gerar a dashboard. Confirma a janela do run.bat."}, 500)
+                return
+            self._json({"ok": True, "message": "Dashboard atualizada."})
+        elif rota == "/api/health":
             self._json({
                 "ok": True,
                 "farm_api": 1,
@@ -400,14 +425,32 @@ class VisitasHandler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
 
+class TBHThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def generate_farm_dashboard() -> bool:
+    """Regenerate the full dashboard in the project root served by this local server."""
+    # Set by arrancar() for the active serving instance.
+    server = _ACTIVE_SERVER[0]
+    if server is None:
+        return False
+    return gerar_builds(server.tbh_root)
+
+
+_ACTIVE_SERVER = [None]
+
+
 def arrancar(porta: int, root: str, db: str, verbose: bool = False,
              host: str = "127.0.0.1") -> ThreadingHTTPServer:
     _DB_PATH[0] = db
-    httpd = ThreadingHTTPServer((host, porta), VisitasHandler)
+    httpd = TBHThreadingHTTPServer((host, porta), VisitasHandler)
     httpd.tbh_bound_host = host
-    httpd.tbh_root = root
+    httpd.tbh_root = os.path.abspath(root)
     httpd.tbh_verbose = verbose
     httpd.tbh_farm_token = secrets.token_urlsafe(32)
+    _ACTIVE_SERVER[0] = httpd
     return httpd
 
 
