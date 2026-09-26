@@ -40,6 +40,36 @@ class TestAlertData(unittest.TestCase):
             alert.notify_drop(hit)
         send.assert_called_once_with(hit)
 
+    def test_teste_discord_aceita_confirmacao_em_minusculas(self):
+        webhook = "https://discord.com/api/webhooks/123456789012345678/test-token"
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert.tbh_discord, "discord_settings", return_value=(webhook, "1406003990063480922")),
+            mock.patch.object(alert.tbh_discord, "send_alert", return_value=True) as send,
+            mock.patch("builtins.input", return_value="sim"),
+            redirect_stdout(output),
+        ):
+            result = alert.main(["--test-discord"])
+        self.assertEqual(result, 0)
+        send.assert_called_once_with(
+            {"name": "Teste do alerta de farm", "conta": "teste manual", "qtd": 1},
+            test=True,
+        )
+
+    def test_teste_discord_continua_a_exigir_confirmacao(self):
+        webhook = "https://discord.com/api/webhooks/123456789012345678/test-token"
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert.tbh_discord, "discord_settings", return_value=(webhook, "")),
+            mock.patch.object(alert.tbh_discord, "send_alert") as send,
+            mock.patch("builtins.input", return_value="nao"),
+            redirect_stdout(output),
+        ):
+            result = alert.main(["--test-discord"])
+        self.assertEqual(result, 3)
+        self.assertIn("Teste Discord cancelado.", output.getvalue())
+        send.assert_not_called()
+
     def test_resolve_conta_por_nome_e_alias_steam(self):
         accounts = [
             {"name": "Conta 1 (geek1781)"},

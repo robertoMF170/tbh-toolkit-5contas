@@ -714,7 +714,7 @@ def main(argv: list[str] | None = None) -> int:
             (f" com mencao a <@{allowed_user}>" if allowed_user else " sem mencao") +
             ". Escreve SIM para continuar: "
         ).strip()
-        if confirmed != "SIM":
+        if confirmed.upper() != "SIM":
             print("Teste Discord cancelado.", flush=True)
             return 3
         ok = tbh_discord.send_alert(
