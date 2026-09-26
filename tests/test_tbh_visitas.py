@@ -269,10 +269,10 @@ class TestServidorHTTP(unittest.TestCase):
     def test_dashboard_injeta_token_por_resposta_e_nao_guarda_segredo(self):
         with self._pedido("/") as resp:
             html = resp.read().decode("utf-8")
-        self.assertIn(self.server.tbh_farm_token, html)
+        self.assertIn("window.__TBH_FARM_API_TOKEN__='" + self.server.tbh_farm_token + "'", html)
         with open(os.path.join(self.root, "minhas_builds.html"), encoding="utf-8") as fh:
             disk_html = fh.read()
-        self.assertIn("__TBH_FARM_API_TOKEN_VALUE__", disk_html)
+        self.assertIn("window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN_VALUE__'", disk_html)
         self.assertNotIn(self.server.tbh_farm_token, disk_html)
 
     def test_api_farm_get_exige_origem_local_e_token(self):
@@ -296,6 +296,30 @@ class TestServidorHTTP(unittest.TestCase):
         self.assertTrue(data["ok"])
         self.assertEqual(data["targets"], [{"name": "Item", "conta": "geek1781"}])
         action.assert_called_once_with({"action": "add", "name": "Item", "conta": "geek1781"})
+
+    def test_adicionar_build_pela_api_local_valida_link_e_regenera(self):
+        url = "https://tbhindex.com/pt/builds/321"
+        with (
+            mock.patch("tbh_site.resolve_url", return_value=url) as resolve,
+            mock.patch("tbh_site.load_urls", return_value=["https://tbhindex.com/pt/builds/252"]),
+            mock.patch("tbh_site.save_urls") as save,
+            mock.patch.object(sv, "gerar_builds", return_value=True) as generate,
+        ):
+            result = sv.executar_acao_farm({"action": "add-build", "name": url})
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["changed"])
+        resolve.assert_called_once_with(url)
+        save.assert_called_once_with([
+            "https://tbhindex.com/pt/builds/252", url,
+        ])
+        generate.assert_called_once()
+
+    def test_adicionar_build_rejeita_outro_dominio_sem_resolver(self):
+        with mock.patch("tbh_site.resolve_url") as resolve:
+            with self.assertRaisesRegex(ValueError, "tbhindex.com"):
+                sv.executar_acao_farm({"action": "add-build", "name": "https://tbhindex.com.evil.example/pt/builds/321"})
+        resolve.assert_not_called()
+
 
     def test_api_farm_post_recusa_token_origem_conteudo_e_request_invalido(self):
         code, _ = self._pedido_erro("/api/farm", {"action": "add", "name": "Item"},

@@ -211,9 +211,9 @@ def handle_cli() -> list:
     args = [a for a in raw if a not in ("--sem-abrir", "--silencioso", "--so-html")]
     urls = load_urls()
     if not args:
-        return urls        if args[0] == "--install-protocol":
-            install_protocol()
-
+        return urls
+    if args[0] == "--install-protocol":
+        install_protocol()
     elif args[0] == "--add" and len(args) > 1:
         u = normalize_url(args[1])
         if u in urls:
@@ -969,7 +969,7 @@ function makeZoom(wrapId,mvId,MW,start){
 const B=__DATA__;
 const DROP_MAP=__DROP_MAP__;
 const MAP_POS=__MAP_POS__;
-window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN__';
+window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN_VALUE__';
 const FARM_API_URL=(location.protocol==='http:' && (location.hostname==='127.0.0.1'||location.hostname==='localhost'))?location.origin+'/api/farm':'';
 window.__FARM_WATCH__=__FARM_WATCH_JSON__;
 const N=B.titles.length;
@@ -1211,34 +1211,37 @@ function closeImport(){
 function normUrl(u){
  u=(u||'').trim();
  if(!u)return '';
- if(!u.startsWith('http'))u='https://'+u;
- u=u.split('?')[0].split('#')[0];
- if(!/tbhindex\.com\/(pt\/)?builds\/\d+/.test(u)&&!confirm('O link nao parece uma build do tbhindex.com. Continuar mesmo assim?'))return '';
- return u;
+ if(!/^https?:\/\//i.test(u))u='https://'+u;
+ try{
+  const parsed=new URL(u);
+  if(parsed.protocol!=='https:'||!['tbhindex.com','www.tbhindex.com'].includes(parsed.hostname.toLowerCase())||!/^\/(pt\/)?builds\/\d+\/?$/.test(parsed.pathname))return '';
+  parsed.search='';parsed.hash='';
+  return parsed.origin+parsed.pathname.replace(/\/$/,'');
+ }catch(e){return '';}
 }
 function doImport(){
- const u=normUrl(document.getElementById('murl').value);
  const st=document.getElementById('mstatus');
- if(!u){st.textContent='';return;}
- const cmd='python tbh_site.py --add '+u;
- const box=document.getElementById('mcmd');
- box.textContent=cmd;
- box.classList.remove('hidden');
- box.onclick=()=>copyText(cmd).then(()=>toast('Comando copiado!'));
- if(FARM_API_URL&&window.__TBH_FARM_API_TOKEN__){
-  farmApi('add-build',u,'').then(function(){st.textContent='A build foi adicionada. O run.bat vai atualizar a dashboard; se nao aparecer, fecha e abre a dashboard novamente.';}).catch(function(error){st.textContent=error.message+' Podes usar o comando manual abaixo.';});
- }else{
-  st.textContent='Abre a dashboard pelo run.bat para importar builds sem permissao do browser. O comando manual fica abaixo.';
+ const u=normUrl(document.getElementById('murl').value);
+ const button=document.getElementById('mgo');
+ if(!u){st.textContent='Cola um link valido de uma build do tbhindex.com (por exemplo: https://tbhindex.com/pt/builds/123).';return;}
+ if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__||window.__TBH_FARM_API_TOKEN__==='__TBH_FARM_API_TOKEN__'){
+  st.textContent='Para adicionar com um clique, fecha esta pagina e abre o run.bat. Depois abre novamente a dashboard.';
+  return;
  }
- copyText(cmd).then(function(ok){if(ok)box.title='Comando manual copiado';});
+ button.disabled=true;
+ st.textContent='A adicionar a build. Pode demorar alguns segundos...';
+ farmApi('add-build',u,'').then(function(data){
+  st.textContent=(data.message||'Build adicionada.')+' A atualizar a dashboard...';
+  setTimeout(function(){location.reload();},1000);
+ }).catch(function(error){
+  st.textContent=(error.message||'Nao foi possivel adicionar a build.')+' Confirma se o run.bat continua aberto e tenta novamente.';
+ }).finally(function(){button.disabled=false;});
 }
 document.getElementById('mgo').addEventListener('click',doImport);
 document.getElementById('mclose').addEventListener('click',closeImport);
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeImport();});
 document.getElementById('murl').addEventListener('keydown',e=>{if(e.key==='Enter')doImport();if(e.key==='Escape')closeImport();});
 applyHidden();
-refreshFarmWatchBar();
-setInterval(refreshFarmWatchBar, 5000);
 
 /* ---------- modo FARM em ciclo: auto-reload a cada 2 min (só na HOME, sem perder build aberta) ---------- */
 (function(){
@@ -1983,8 +1986,7 @@ __JS__
     _js2 = (JS.replace("__DATA__", data_json)
             .replace("__DROP_MAP__", drop_json)
             .replace("__MAP_POS__", map_pos_json)
-            .replace("__FARM_WATCH_JSON__", farm_watch_json)
-            .replace("__TBH_FARM_API_TOKEN__", "__TBH_FARM_API_TOKEN_VALUE__"))
+            .replace("__FARM_WATCH_JSON__", farm_watch_json))
     doc = (doc
            .replace("__CSS__", CSS)
            .replace("__FARMOP__", farm_html)

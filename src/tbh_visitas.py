@@ -176,24 +176,46 @@ def executar_acao_farm(pedido: dict) -> dict:
     account = str(pedido.get("conta") or "").strip()
     if action == "add-build":
         from urllib.parse import urlsplit
-        from tbh_site import normalize_url, resolve_url, load_urls, save_urls
+        import tbh_site
 
-        normalized_url = normalize_url(name)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        state_file = tbh_site.STATE_FILE
+        if not name or len(name) > 2048:
+            raise ValueError("O link da build e invalido.")
+        normalized_url = tbh_site.normalize_url(name)
         parsed = urlsplit(normalized_url)
-        if parsed.scheme != "https" or parsed.netloc.casefold() not in {"tbhindex.com", "www.tbhindex.com"}:
+        path_parts = [part for part in parsed.path.strip("/").split("/") if part]
+        valid_path = (
+            len(path_parts) == 3 and path_parts[0].casefold() == "pt"
+            and path_parts[1].casefold() == "builds" and path_parts[2].isascii() and path_parts[2].isdigit()
+        ) or (
+            len(path_parts) == 2 and path_parts[0].casefold() == "builds"
+            and path_parts[1].isascii() and path_parts[1].isdigit()
+        )
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc.casefold() not in {"tbhindex.com", "www.tbhindex.com"}
+            or not valid_path
+        ):
             raise ValueError("O link tem de ser de uma build do tbhindex.com.")
-        build_url = resolve_url(normalized_url)
+        build_url = tbh_site.resolve_url(normalized_url)
         if not build_url:
             raise ValueError("Nao encontrei essa build do tbhindex.com.")
-        urls = load_urls()
+        urls = tbh_site.load_urls()
         if build_url in urls:
             return {"ok": True, "changed": False, "action": action, "message": "Essa build ja estava adicionada."}
         urls.append(build_url)
-        save_urls(urls)
-        if not gerar_builds(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+        if not os.path.isfile(state_file):
+            raise RuntimeError("Nao encontrei o ficheiro local de builds para guardar a nova build.")
+        with open(state_file, encoding="utf-8") as fh:
+            previous_state = fh.read()
+        tbh_site.save_urls(urls)
+        if not gerar_builds(root):
+            with open(state_file, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(previous_state)
             raise RuntimeError("Nao foi possivel regenerar a dashboard.")
         return {"ok": True, "changed": True, "action": action,
-                "message": "Build adicionada. A dashboard sera atualizada ao voltar a abrir."}
+                "message": "Build adicionada. A dashboard vai ser atualizada agora."}
     if action not in {"add", "remove", "ack", "status"}:
         raise ValueError("Acao de farm desconhecida.")
     if action != "status" and (not name or len(name) > 200 or len(account) > 120):

@@ -80,6 +80,16 @@ class TestDiscordFarmAlerts(unittest.TestCase):
             discord.set_discord_enabled(False, enabled_file)
             self.assertFalse(discord.discord_enabled(enabled_file))
 
+    def test_escolha_guardada_tem_precedencia_sobre_variavel_de_ambiente(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            enabled_file = os.path.join(tmp, "enabled")
+            with mock.patch.dict(os.environ, {"TBH_DISCORD_ENABLED": "1"}):
+                self.assertFalse(discord.discord_enabled(enabled_file))
+                discord.set_discord_enabled(False, enabled_file)
+                self.assertFalse(discord.discord_enabled(enabled_file))
+                discord.set_discord_enabled(True, enabled_file)
+                self.assertTrue(discord.discord_enabled(enabled_file))
+
     def test_send_alert_posts_payload_and_never_logs_url(self):
         calls = []
         output = []
