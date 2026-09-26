@@ -302,6 +302,8 @@ class VisitasHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", tipos.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(corpo)))
+        if relative_parts == ["minhas_builds.html"]:
+            self.send_header("Cache-Control", "no-store")
         self._cors()
         self.end_headers()
         self.wfile.write(corpo)
@@ -366,10 +368,11 @@ class VisitasHandler(BaseHTTPRequestHandler):
         elif bound_host == "localhost":
             allowed_hosts.add(f"127.0.0.1:{port}")
         allowed_origins = {f"http://{host}" for host in allowed_hosts} | {"null"}
+        origin = self.headers.get("Origin", "")
         return (
             peer_is_local
             and self.headers.get("Host", "").lower() in allowed_hosts
-            and self.headers.get("Origin", "") in allowed_origins
+            and (origin in allowed_origins or (self.command == "GET" and not origin))
         )
 
     def do_POST(self):  # noqa: N802

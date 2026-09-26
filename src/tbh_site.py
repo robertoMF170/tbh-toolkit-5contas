@@ -1927,6 +1927,7 @@ def main() -> None:
 <script>
 __JS__
 </script>
+<script src="src/tbh_site.js"></script>
 <script>
 (function(){
   var VB_URL = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin + '/api/visitas' : 'http://localhost:8765/api/visitas';
@@ -1987,8 +1988,15 @@ __JS__
         # valida JSON
         json.loads(map_pos_json)
     except Exception: map_pos_json="{}"
-    # Farm-watch state is fetched from the local API; never embed private save data in the HTML.
+    # Farm UI helpers live in an ignored local asset. Only the HTTP response
+    # injects the short-lived API token, so no token is written into this HTML.
     farm_watch_json = "{\"targets\":[],\"hits\":[]}"
+    farm_ui_js = (FARM_UI_JS
+                  .replace("__FARM_WATCH_JSON__", farm_watch_json)
+                  .replace("__TBH_FARM_API_TOKEN__", "__TBH_FARM_API_TOKEN__"))
+    farm_ui_path = os.path.join(ROOT, "src", "tbh_site.js")
+    with open(farm_ui_path, "w", encoding="utf-8") as farm_ui_file:
+        farm_ui_file.write(farm_ui_js)
     _js2 = (JS.replace("__DATA__", data_json)
             .replace("__DROP_MAP__", drop_json)
             .replace("__MAP_POS__", map_pos_json)
