@@ -591,7 +591,7 @@ class TestFarmZoneValidation(unittest.TestCase):
         import tbh_inventario as inventory
 
         normal_save = {"commonSaveData": {"currentStageKey": 1101, "currentStageWave": 4}}
-        plague_save = {"commonSaveData": {"currentStageKey": 22002}}
+        plague_save = {"commonSaveData": {"currentStageKey": 201302}}
         stages = {1101: {"act": 1, "no": 1, "diff": "NORMAL"}}
         with (
             mock.patch.object(inventory, "_save_legivel", return_value="save"),

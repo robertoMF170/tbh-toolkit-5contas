@@ -871,7 +871,7 @@ _DIF_LABEL = {"NORMAL": "Normal", "NIGHTMARE": "Nightmare", "TORMENT": "Torment"
 
 
 def _stage_txt(key, stages: dict, wave=None) -> str:
-    """stageKey (+onda opcional) -> zona legível; chaves plague usam A-PP após o ato 21."""
+    """stageKey (+onda opcional) -> zona legível, incluindo atos do Plague."""
     try:
         k = int(key or 0)
     except Exception:
@@ -883,9 +883,9 @@ def _stage_txt(key, stages: dict, wave=None) -> str:
         txt = str(s.get("act", "?")) + "-" + str(s.get("no", "?"))
         dif = _DIF_LABEL.get(s.get("diff"), s.get("diff", ""))
         return txt + " " + dif if dif else txt
-    # chaves de Plague codificam o ato no milhar e o andar nas duas últimas casas.
-    if 20000 <= k < 30000:
-        act = (k // 1000) % 100
+    # Plague: 201302 -> ato 22, andar 02 (fora do mapa estático).
+    if 200000 <= k < 300000:
+        act = 21 + (k // 1000) % 100
         pp = k % 100
         return str(act) + "-" + str(pp) + " Plague"
     return ""
@@ -911,8 +911,8 @@ def _zona_do_save_data(p: dict) -> dict:
         except (TypeError, ValueError):
             return result
         diff = str(stage.get("diff") or "").upper()
-    elif 20000 <= key < 30000:
-        act = (key // 1000) % 100
+    elif 200000 <= key < 300000:
+        act = 21 + (key // 1000) % 100
         no = key % 100
         diff = "PLAGUE"
     else:
@@ -944,7 +944,7 @@ def _stage_dif(key, stages: dict) -> str:
     s = stages.get(k) or stages.get(str(k))
     if s:
         return _DIF_LABEL.get(s.get("diff"), s.get("diff", "")) or ""
-    if 20000 <= k < 30000:
+    if 200000 <= k < 300000:
         return "Plague"
     return ""
 

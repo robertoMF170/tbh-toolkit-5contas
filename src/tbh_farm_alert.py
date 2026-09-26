@@ -631,12 +631,16 @@ def _expected_zone_labels(zones: list[tuple[int, int, int, bool]], limit: int = 
     diff_labels = {0: "Normal", 1: "Pesadelo", 2: "Inferno", 3: "Tormento"}
     labels = []
     for act, no, diff_index, plague in zones:
+        if diff_index not in diff_labels:
+            continue
         label = f"{act}-{no} {diff_labels[diff_index]}"
         if plague:
             label += " (Plague)"
         labels.append(label)
+    if zones and not labels:
+        return "Plague — dificuldade a verificar no save"
     if len(labels) > limit:
-        labels = labels[:limit] + [f"+{len(zones) - limit} outras"]
+        labels = labels[:limit] + [f"+{len(labels) - limit} outras"]
     return ", ".join(labels)
 
 
@@ -824,23 +828,6 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     if not isinstance(old_zone_statuses, dict):
         old_zone_statuses = {}
     active_zone_keys = set()
-    for target in targets:
-        requested_account = str(target.get("conta") or "").strip()
-        if requested_account:
-            resolved_account = resolve_account_name(requested_account, all_accounts)
-            target_accounts = [
-                account for account in accounts
-                if resolved_account and account["name"].casefold() == resolved_account.casefold()
-            ]
-        else:
-            target_accounts = accounts
-        active_zone_keys.update(
-            _zone_status_key(target, account["name"]) for account in target_accounts
-        )
-    next_zone_statuses = {
-        key: value for key, value in old_zone_statuses.items()
-        if key in active_zone_keys
-    }
     zone_notifications = []
     zone_keys_seen = set()
     if callable(zone_reader) or zone_snapshots:
@@ -859,7 +846,11 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             except Exception:
                 drop_stages = []
             for account in target_accounts:
-                if account["name"] in zone_snapshots:
+                if account["name"].casefold() in failed_accounts:
+                    if account["name"] in old_state.get("zone_unreadable", []):
+                        continue
+                    zone = {}
+                elif account["name"] in zone_snapshots:
                     zone = zone_snapshots[account["name"]]
                 elif callable(zone_reader):
                     try:
@@ -872,6 +863,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                     zone = {}
                 status, reason, zones = _evaluate_zone(zone, drop_stages)
                 status_key = _zone_status_key(target, account["name"])
+                active_zone_keys.add(status_key)
                 signature = _zone_status_signature(status, zone, zones, reason)
                 next_zone_statuses[status_key] = signature
                 if status_key in zone_keys_seen:
@@ -890,11 +882,22 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                     "reason": reason,
                 })
 
+    next_zone_statuses = {
+        key: value for key, value in next_zone_statuses.items()
+        if key in active_zone_keys
+    }
+    old_unreadable = old_state.get("zone_unreadable", []) if isinstance(old_state, dict) else []
+    if not isinstance(old_unreadable, list):
+        old_unreadable = []
+    next_unreadable = sorted(
+        {str(name) for name in old_unreadable if str(name).casefold() in failed_accounts}
+    )
     _write_json_atomic(state_file, {
         "version": 1,
         "accounts": {**previous, **current},
         "target_baselines": next_baselines,
         "zone_statuses": next_zone_statuses,
+        "zone_unreadable": next_unreadable,
     })
 
     for zone_alert in zone_notifications:
