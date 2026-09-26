@@ -488,6 +488,65 @@ def _record_hit(hit: dict, path: str = WATCH_FILE) -> None:
     _write_json_atomic(path, data)
 
 
+def _hit_matches_target(hit: dict, target: dict, accounts: list[dict]) -> bool:
+    if str(hit.get("name") or "").strip().casefold() != str(target.get("name") or "").strip().casefold():
+        return False
+    requested_account = str(target.get("conta") or "").strip().casefold()
+    if not requested_account:
+        return True
+    hit_account = str(hit.get("conta") or "").strip().casefold()
+    resolved_account = resolve_account_name(requested_account, accounts)
+    if resolved_account:
+        return hit_account == resolved_account.casefold()
+    return hit_account == requested_account or hit_account.endswith(f"({requested_account})")
+
+
+def _target_hit_summary(targets: list[dict], accounts: list[dict] | None = None,
+                        watch_file: str | None = None) -> list[dict]:
+    """Summarize the quantities and alert events recorded for each watched target."""
+    accounts = accounts or []
+    history = _watch_data(watch_file or WATCH_FILE)["hits"]
+    summary = []
+    for target in targets:
+        quantity = alert_count = 0
+        for hit in history:
+            if not isinstance(hit, dict) or not _hit_matches_target(hit, target, accounts):
+                continue
+            try:
+                found = int(hit.get("qtd") or 0)
+            except (TypeError, ValueError):
+                continue
+            if found > 0:
+                quantity += found
+                alert_count += 1
+        summary.append({"qtd": quantity, "alertas": alert_count})
+    return summary
+
+
+def _print_watch_summary(targets: list[dict], accounts: list[dict],
+                         watch_file: str | None = None) -> None:
+    """Print a concise target/hit summary only when requested or targets change."""
+    counts = _target_hit_summary(targets, accounts, watch_file)
+    print(f"[FARM] Alvos a vigiar ({len(targets)}):", flush=True)
+    total_quantity = total_alerts = 0
+    for target, count in zip(targets, counts):
+        account = target.get("conta") or "todas as contas"
+        print(
+            f"[FARM]   {target['name']} @ {account} — {count['qtd']} unidade(s) encontradas "
+            f"em {count['alertas']} alerta(s).",
+            flush=True,
+        )
+        total_quantity += count["qtd"]
+        total_alerts += count["alertas"]
+    if not targets:
+        print("[FARM] Sem alvos ativos.", flush=True)
+    print(
+        f"[FARM] Total nos últimos 100 registos guardados: {total_quantity} unidade(s) "
+        f"em {total_alerts} alerta(s).",
+        flush=True,
+    )
+
+
 def notify_drop(hit: dict) -> None:
     message = f"ITEM ENCONTRADO: {hit['name']}\nConta: {hit['conta']}\nQuantidade nova: {hit['qtd']}"
     print(f"\n\a[FARM] {message.replace(chr(10), ' | ')}", flush=True)
@@ -624,10 +683,7 @@ def watch(interval: float = 2.0) -> None:
                 last_signature = target_signature
                 _set_farm_window_title(targets)
                 if targets:
-                    print("[FARM] A vigiar: " + "; ".join(
-                        t["name"] + (f" @ {t['conta']}" if t.get("conta") else " @ todas as contas")
-                        for t in targets
-                    ), flush=True)
+                    _print_watch_summary(targets, configured_accounts)
                 else:
                     print("[FARM] Sem alvos. Clica Farmar na dashboard para adicionar um item.", flush=True)
 
@@ -635,9 +691,11 @@ def watch(interval: float = 2.0) -> None:
             # processo existe mesmo quando ainda nao ha alvos ou saves acessiveis.
             _write_heartbeat(targets, configured_accounts, interval, status="scanning" if targets else "starting", watched_accounts=watched_accounts)
             if targets:
-                poll_once()
+                hits = poll_once()
                 configured_accounts = load_accounts()
                 watched_accounts = _accounts_for_targets(targets, configured_accounts)
+                if hits:
+                    _print_watch_summary(targets, configured_accounts)
                 watched_names = {account["name"].casefold() for account in watched_accounts}
                 unreadable = len(watched_names & {name.casefold() for name in _LAST_SCAN_ERRORS})
                 unresolved = any(target.get("conta") and not resolve_account_name(target["conta"], configured_accounts) for target in targets)
@@ -652,8 +710,6 @@ def watch(interval: float = 2.0) -> None:
                 else:
                     status = "active"
                 _write_heartbeat(targets, configured_accounts, interval, status=status, watched_accounts=watched_accounts)
-                good = max(0, len(watched_accounts) - unreadable)
-                print(f"[FARM] {datetime.now().strftime('%H:%M:%S')} — {len(targets)} alvo(s); saves vigiados legiveis {good}/{len(watched_accounts)}; verifica a cada {interval:g}s.", flush=True)
             else:
                 _LAST_SCAN_ERRORS.clear()
                 status = "waiting_for_targets" if configured_accounts else "no_accounts"
@@ -771,10 +827,7 @@ def main(argv: list[str] | None = None) -> int:
         if heartbeat["alive"] and (not args.conta or requested_account) and watches_requested_account:
             status = str(heartbeat.get("status") or "?")
             print(f"VIGIA ATIVO — {heartbeat.get('target_count', len(targets))} alvo(s), estado: {status}.")
-            print("Alvos: " + ("; ".join(
-                str(target.get("name") or "?") + (f" @ {target.get('conta')}" if target.get("conta") else " @ todas")
-                for target in targets
-            ) or "nenhum"))
+            _print_watch_summary(targets, status_accounts)
             print("Contas vigiadas: " + (", ".join(account["name"] for account in watched_accounts) or "nenhuma") + ".")
             if args.conta:
                 print(f"Conta pedida: {args.conta} -> {requested_account}.")

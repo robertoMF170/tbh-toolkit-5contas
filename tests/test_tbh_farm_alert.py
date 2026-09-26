@@ -97,6 +97,7 @@ class TestAlertData(unittest.TestCase):
         with (
             mock.patch.object(alert, "watcher_status", return_value=heartbeat),
             mock.patch.object(alert, "_watch_process_running", return_value=True),
+            mock.patch.object(alert, "_print_watch_summary") as print_summary,
             redirect_stdout(output),
         ):
             result = alert.main(["--status", "--conta", "geek1781"])
@@ -104,6 +105,28 @@ class TestAlertData(unittest.TestCase):
         self.assertIn("VIGIA ATIVO", output.getvalue())
         self.assertIn("Contas vigiadas: Conta 1 (geek1781)", output.getvalue())
         self.assertIn("geek1781 -> Conta 1 (geek1781)", output.getvalue())
+        print_summary.assert_called_once_with(
+            [{"name": "Shadow Bow", "conta": "geek1781"}],
+            [{"name": "Conta 1 (geek1781)"}],
+        )
+
+    def test_resumo_mostra_unidades_encontradas_por_alvo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "farm_watch.json")
+            write_json(watch, {"targets": [], "hits": [
+                {"name": "Shadow Bow", "conta": "Conta 1 (geek1781)", "qtd": 2},
+                {"name": "Shadow Bow", "conta": "Conta 1 (geek1781)", "qtd": 1, "acknowledged": True},
+                {"name": "Shadow Bow", "conta": "Conta 2 (other)", "qtd": 5},
+            ]})
+            output = io.StringIO()
+            alert._print_watch_summary(
+                [{"name": "Shadow Bow", "conta": "geek1781"}],
+                [{"name": "Conta 1 (geek1781)"}, {"name": "Conta 2 (other)"}],
+                watch,
+            )
+        self.assertIn("Alvos a vigiar (1)", output.getvalue())
+        self.assertIn("Shadow Bow @ geek1781 — 3 unidade(s) encontradas em 2 alerta(s)", output.getvalue())
+        self.assertIn("Total nos últimos 100 registos guardados: 3 unidade(s) em 2 alerta(s)", output.getvalue())
 
     def test_conta_explicita_restringe_a_leitura_a_conta_alias(self):
         with tempfile.TemporaryDirectory() as tmp:

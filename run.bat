@@ -173,7 +173,7 @@ if errorlevel 4 goto farm_status_waiting
 if errorlevel 3 goto farm_status_starting
 if errorlevel 2 goto farm_status_warning
 if errorlevel 1 goto farm_status_inactive
-echo [FARM] OK — deixa esta janela aberta; o estado atualiza a cada 2 segundos.
+echo [FARM] OK — deixa esta janela aberta; verifica de 2 em 2s em segundo plano sem repetir linhas.
 goto farm_status_done
 :farm_status_waiting
 echo [FARM] ATIVO E A ESPERA DE ALVOS — clica Farmar na dashboard e confirma Abrir Python no browser.
