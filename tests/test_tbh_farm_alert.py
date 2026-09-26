@@ -89,13 +89,14 @@ class TestAlertData(unittest.TestCase):
         with (
             mock.patch.object(alert.tbh_discord, "discord_settings", return_value=("", "")),
             mock.patch.object(alert.tbh_discord, "set_discord_enabled") as set_enabled,
-            mock.patch.object(alert, "_ask_yes_no", side_effect=[True, False]),
+            mock.patch.object(alert, "_ask_yes_no", side_effect=[True, False]) as ask,
             redirect_stdout(output),
         ):
             result = alert.main(["--discord-prompt"])
         self.assertEqual(result, 0)
         set_enabled.assert_called_once_with(False)
-        self.assertIn("Queres configurar agora?", output.getvalue())
+        ask.assert_any_call("Queres configurar agora? [S/N]: ")
+        self.assertIn("Para receber alertas no canal", output.getvalue())
 
     def test_teste_discord_continua_a_exigir_confirmacao(self):
         webhook = "https://discord.com/api/webhooks/123456789012345678/test-token"

@@ -84,7 +84,7 @@ class TestDiscordFarmAlerts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             enabled_file = os.path.join(tmp, "enabled")
             with mock.patch.dict(os.environ, {"TBH_DISCORD_ENABLED": "1"}):
-                self.assertFalse(discord.discord_enabled(enabled_file))
+                self.assertTrue(discord.discord_enabled(enabled_file))
                 discord.set_discord_enabled(False, enabled_file)
                 self.assertFalse(discord.discord_enabled(enabled_file))
                 discord.set_discord_enabled(True, enabled_file)

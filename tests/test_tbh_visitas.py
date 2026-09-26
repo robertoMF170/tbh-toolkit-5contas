@@ -186,7 +186,7 @@ class TestServidorHTTP(unittest.TestCase):
         self._dir = tempfile.TemporaryDirectory()
         self.root = self._dir.name
         with open(os.path.join(self.root, "minhas_builds.html"), "w", encoding="utf-8") as fh:
-            fh.write('<script>window.__TBH_FARM_API_TOKEN__="__TBH_FARM_API_TOKEN_VALUE__";</script>')
+            fh.write("window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN_VALUE__';")
         with open(os.path.join(self.root, "segredo.txt"), "w", encoding="utf-8") as fh:
             fh.write("secreto")
         self.db = os.path.join(self.root, "var", "visitas.json")
@@ -208,8 +208,11 @@ class TestServidorHTTP(unittest.TestCase):
 
     def _pedido(self, caminho, dados=None, metodo=None, headers=None):
         corpo = json.dumps(dados).encode("utf-8") if dados is not None else None
+        request_headers = dict(headers or {})
+        if corpo is not None:
+            request_headers.setdefault("Content-Type", "application/json")
         req = urllib.request.Request(self.base + caminho, data=corpo,
-                                     method=metodo or ("POST" if corpo else "GET"), headers=headers or {})
+                                     method=metodo or ("POST" if corpo else "GET"), headers=request_headers)
         return urllib.request.urlopen(req, timeout=10)
 
     def _pedido_erro(self, caminho, dados=None, metodo=None, headers=None):
@@ -269,10 +272,10 @@ class TestServidorHTTP(unittest.TestCase):
     def test_dashboard_injeta_token_por_resposta_e_nao_guarda_segredo(self):
         with self._pedido("/") as resp:
             html = resp.read().decode("utf-8")
-        self.assertIn("window.__TBH_FARM_API_TOKEN__='" + self.server.tbh_farm_token + "'", html)
+        self.assertEqual(html, "window.__TBH_FARM_API_TOKEN__='" + self.server.tbh_farm_token + "';")
         with open(os.path.join(self.root, "minhas_builds.html"), encoding="utf-8") as fh:
             disk_html = fh.read()
-        self.assertIn("window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN_VALUE__'", disk_html)
+        self.assertEqual(disk_html, "window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN_VALUE__';")
         self.assertNotIn(self.server.tbh_farm_token, disk_html)
 
     def test_api_farm_get_exige_origem_local_e_token(self):
@@ -281,7 +284,10 @@ class TestServidorHTTP(unittest.TestCase):
         self.assertIn("nao autorizado", json.loads(body.decode("utf-8"))["erro"])
         code, _ = self._pedido_erro("/api/farm", metodo="GET", headers=self._farm_headers(origin="http://evil.example"))
         self.assertEqual(code, 403)
-        with mock.patch.object(sv, "executar_acao_farm", return_value={"ok": True, "targets": [], "hits": []}):
+        with (
+            mock.patch("tbh_farm_alert.load_targets", return_value=[]),
+            mock.patch("tbh_farm_alert._watch_data", return_value={"targets": [], "hits": []}),
+        ):
             with self._pedido("/api/farm", metodo="GET", headers=self._farm_headers(origin=self.base)) as resp:
                 self.assertEqual(json.loads(resp.read().decode("utf-8"))["targets"], [])
 
@@ -299,13 +305,18 @@ class TestServidorHTTP(unittest.TestCase):
 
     def test_adicionar_build_pela_api_local_valida_link_e_regenera(self):
         url = "https://tbhindex.com/pt/builds/321"
-        with (
-            mock.patch("tbh_site.resolve_url", return_value=url) as resolve,
-            mock.patch("tbh_site.load_urls", return_value=["https://tbhindex.com/pt/builds/252"]),
-            mock.patch("tbh_site.save_urls") as save,
-            mock.patch.object(sv, "gerar_builds", return_value=True) as generate,
-        ):
-            result = sv.executar_acao_farm({"action": "add-build", "name": url})
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = os.path.join(tmp, "config", "builds.json")
+            os.makedirs(os.path.dirname(state_file))
+            with open(state_file, "w", encoding="utf-8") as fh:
+                json.dump({"urls": ["https://tbhindex.com/pt/builds/252"]}, fh)
+            with (
+                mock.patch("tbh_site.STATE_FILE", state_file),
+                mock.patch("tbh_site.resolve_url", return_value=url) as resolve,
+                mock.patch("tbh_site.save_urls") as save,
+                mock.patch.object(sv, "gerar_builds", return_value=True) as generate,
+            ):
+                result = sv.executar_acao_farm({"action": "add-build", "name": url})
         self.assertTrue(result["ok"])
         self.assertTrue(result["changed"])
         resolve.assert_called_once_with(url)
@@ -353,7 +364,7 @@ class TestServidorHTTP(unittest.TestCase):
     def test_ficheiro_inexistente(self):
         codigo, corpo = self._pedido_erro("/nao_existe.txt")
         self.assertEqual(codigo, 404)
-        self.assertIn(b"nao encontrado", corpo)
+        self.assertIn(b"privado ou nao publicado", corpo)
 
     def test_post_rota_desconhecida(self):
         codigo, corpo = self._pedido_erro("/api/outra", {"x": 1})
