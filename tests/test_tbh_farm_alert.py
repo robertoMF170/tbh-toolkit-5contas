@@ -192,7 +192,7 @@ class TestAlertData(FarmAlertTestCase):
         self.assertEqual(sleep.call_args_list, [mock.call(5.0), mock.call(5.0)])
         self.assertIn("sem limpar o ecrã", text)
         self.assertIn("VIGIA ATIVO", text)
-        self.assertIn("ATIVA A VIGIAR", text)
+        self.assertIn("A VIGIAR", text)
         self.assertIn("2026-04-01T12:00:00", text)
         self.assertNotIn("\x1b[2J", text)
         self.assertIn("Acompanhamento do status parado", text)

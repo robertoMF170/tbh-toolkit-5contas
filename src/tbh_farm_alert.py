@@ -1090,11 +1090,15 @@ def _discord_prompt() -> int:
 
 
 def _status_hit_key(hit: dict) -> str:
+    try:
+        quantity = int(hit.get("qtd") or 0)
+    except (TypeError, ValueError):
+        quantity = 0
     return json.dumps(
         [
             str(hit.get("name") or "").casefold(),
             str(hit.get("conta") or "").casefold(),
-            int(hit.get("qtd") or 0),
+            quantity,
             str(hit.get("time") or ""),
         ],
         ensure_ascii=True,
@@ -1111,15 +1115,16 @@ def _matching_target_hits(targets: list[dict], accounts: list[dict]) -> list[dic
     ]
 
 
+def _status_target_label(target: dict) -> str:
+    item = str(target.get("name") or "?")
+    account = str(target.get("conta") or "todas as contas")
+    return f"{item} @ {account}"
+
+
 def _status_report(args, compact: bool = False) -> int:
-    webhook_url, mention_id = tbh_discord.discord_settings()
     if not compact:
-        if not webhook_url:
-            print(f"Discord: nao configurado ({tbh_discord.WEBHOOK_ENV} em .env).")
-        elif not tbh_discord.valid_webhook_url(webhook_url):
-            print("Discord: URL configurado, mas formato invalido.")
-        else:
-            print("Discord: webhook configurado; " + ("mencao autorizada configurada." if mention_id and tbh_discord.valid_discord_user_id(mention_id) else "sem ID valido para mencionar robs."))
+        discord_label = "ativadas" if tbh_discord.discord_enabled() else "desativadas"
+        print(f"Discord: notificacoes {discord_label} pela preferencia local.")
 
     heartbeat = watcher_status(interval=args.interval)
     heartbeat["process_running"] = _watch_process_running()
@@ -1159,30 +1164,40 @@ def _status_report(args, compact: bool = False) -> int:
         status = str(heartbeat.get("status") or "?")
         if compact:
             matches = _matching_target_hits(targets, status_accounts)
-            total_drops = sum(max(0, int(hit.get("qtd") or 0)) for hit in matches)
+            total_drops = 0
+            for hit in matches:
+                try:
+                    total_drops += max(0, int(hit.get("qtd") or 0))
+                except (TypeError, ValueError):
+                    continue
             if matches:
                 last_drop = str(matches[-1].get("time") or "hora desconhecida")
                 drops_text = f"{total_drops} unidade(s) em {len(matches)} drop(s); último: {last_drop}"
             else:
                 drops_text = "nenhum drop registado para estes alvos ainda"
             state_labels = {
-                "active": "ATIVA A VIGIAR",
-                "waiting_for_targets": "ATIVA À ESPERA DE ALVOS",
-                "save_read_error": "ATIVA COM ERRO DE SAVE",
-                "partial_warning": "ATIVA COM AVISO",
-                "account_not_found": "ATIVA, CONTA NÃO ENCONTRADA",
-                "no_accounts": "ATIVA, SEM CONTAS",
-                "starting": "A ARRANCAR",
-                "scanning": "A LER SAVES",
-                "error": "ATIVA COM ERRO",
+                "active": "VIGIA ATIVO — A VIGIAR",
+                "waiting_for_targets": "VIGIA ATIVO — À ESPERA DE ALVOS",
+                "save_read_error": "VIGIA ATIVO — ERRO DE SAVE",
+                "partial_warning": "VIGIA ATIVO — COM AVISO",
+                "account_not_found": "VIGIA ATIVO — CONTA NÃO ENCONTRADA",
+                "no_accounts": "VIGIA ATIVO — SEM CONTAS",
+                "starting": "VIGIA A ARRANCAR",
+                "scanning": "VIGIA A LER SAVES",
+                "error": "VIGIA ATIVO — COM ERRO",
             }
             unreadable = heartbeat.get("unreadable_accounts", [])
             unreadable_count = len(unreadable) if isinstance(unreadable, list) else 0
+            readable_count = max(0, len(watched_accounts) - unreadable_count)
+            target_labels = [_status_target_label(target) for target in targets]
+            if len(target_labels) > 3:
+                target_labels = target_labels[:3] + [f"+{len(target_labels) - 3} outros"]
+            targets_text = ", ".join(target_labels) or "sem alvos"
             print(
-                f"[{now_label}] {state_labels.get(status, 'VIGIA ATIVA')} | "
+                f"[{now_label}] {state_labels.get(status, 'VIGIA ATIVO')} | "
                 f"última leitura: {heartbeat.get('updated_at', '?')} ({age:.1f}s) | "
-                f"{heartbeat.get('target_count', len(targets))} alvo(s), "
-                f"saves com erro: {unreadable_count} | {drops_text}",
+                f"saves legíveis: {readable_count}/{len(watched_accounts)} | "
+                f"alvos: {targets_text} | {drops_text}",
                 flush=True,
             )
         else:
@@ -1251,11 +1266,9 @@ def _status_follow(args) -> int:
         "Ctrl+C para parar; os novos drops aparecem abaixo.",
         flush=True,
     )
-    first = True
     try:
         while True:
-            _status_report(args, compact=not first)
-            first = False
+            _status_report(args, compact=True)
             for hit in _watch_data()["hits"]:
                 if not isinstance(hit, dict):
                     continue
@@ -1278,7 +1291,7 @@ def _status_follow(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Vigia os itens farmados e alerta quando aparecem nos saves.")
     parser.add_argument("--watch", action="store_true", help="vigia continuamente, consultando a cada 2 segundos")
-    parser.add_argument("--status", action="store_true", help="acompanha continuamente o vigia; nao limpa o terminal")
+    parser.add_argument("--status", action="store_true", help="acompanha continuamente o vigia, sem limpar o terminal")
     parser.add_argument("--once", action="store_true", help="com --status, mostra o estado uma vez e termina")
     parser.add_argument("--status-interval", type=float, default=5.0, help="segundos entre atualizacoes do status (predefinicao 5)")
     parser.add_argument("--check-running", action="store_true", help="verifica o bloqueio do processo sem iniciar outra vigia")
