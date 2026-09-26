@@ -166,11 +166,11 @@ if not errorlevel 1 goto farm_already_running
 start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2 --report-interval 900
 echo       A verificar arranque do processo...
 timeout /t 2 /nobreak >nul
-python -X utf8 src\tbh_farm_alert.py --status --interval 2
+python -X utf8 src\tbh_farm_alert.py --status --once --interval 2
 if errorlevel 1 (
   echo       A vigia ainda nao ficou pronta; nova verificacao em 3 segundos...
   timeout /t 3 /nobreak >nul
-  python -X utf8 src\tbh_farm_alert.py --status --interval 2
+  python -X utf8 src\tbh_farm_alert.py --status --once --interval 2
 )
 if errorlevel 5 goto farm_status_command_error
 if errorlevel 4 goto farm_status_waiting
@@ -198,7 +198,7 @@ echo.
 goto farm_alert_done
 :farm_already_running
 echo [FARM] Ja existe uma vigia ativa; nao iniciei uma copia. A verificar o estado atual...
-python -X utf8 src\tbh_farm_alert.py --status --interval 2
+python -X utf8 src\tbh_farm_alert.py --status --once --interval 2
 if errorlevel 5 goto farm_already_error
 goto farm_status_done
 :farm_already_error

@@ -1089,10 +1089,198 @@ def _discord_prompt() -> int:
     return 0
 
 
+def _status_hit_key(hit: dict) -> str:
+    return json.dumps(
+        [
+            str(hit.get("name") or "").casefold(),
+            str(hit.get("conta") or "").casefold(),
+            int(hit.get("qtd") or 0),
+            str(hit.get("time") or ""),
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
+def _matching_target_hits(targets: list[dict], accounts: list[dict]) -> list[dict]:
+    history = _watch_data()["hits"]
+    return [
+        hit for hit in history
+        if isinstance(hit, dict)
+        and any(_hit_matches_target(hit, target, accounts) for target in targets)
+    ]
+
+
+def _status_report(args, compact: bool = False) -> int:
+    webhook_url, mention_id = tbh_discord.discord_settings()
+    if not compact:
+        if not webhook_url:
+            print(f"Discord: nao configurado ({tbh_discord.WEBHOOK_ENV} em .env).")
+        elif not tbh_discord.valid_webhook_url(webhook_url):
+            print("Discord: URL configurado, mas formato invalido.")
+        else:
+            print("Discord: webhook configurado; " + ("mencao autorizada configurada." if mention_id and tbh_discord.valid_discord_user_id(mention_id) else "sem ID valido para mencionar robs."))
+
+    heartbeat = watcher_status(interval=args.interval)
+    heartbeat["process_running"] = _watch_process_running()
+    heartbeat["alive"] = heartbeat["alive"] and heartbeat["process_running"]
+    age = float(heartbeat.get("age_seconds") or 0)
+    now_label = datetime.now().strftime("%H:%M:%S")
+    if heartbeat["process_running"] and not heartbeat["alive"]:
+        if compact:
+            print(f"[{now_label}] VIGIA SEM HEARTBEAT — sem atualização há {age:.1f}s.", flush=True)
+        else:
+            print(f"VIGIA PRESO OU SEM HEARTBEAT — o processo existe, mas nao atualiza ha {age:.1f}s.")
+            print("Os alertas nao estao confirmados; verifica a janela do run.bat e os erros de leitura.")
+        return 2
+
+    account_rows = heartbeat.get("accounts", [])
+    status_accounts = [
+        {"name": str(name).strip()}
+        for name in account_rows
+        if isinstance(name, str) and name.strip()
+    ] if isinstance(account_rows, list) else []
+    watched_rows = heartbeat.get("watched_accounts", account_rows)
+    watched_accounts = [
+        {"name": str(name).strip()}
+        for name in watched_rows
+        if isinstance(name, str) and name.strip()
+    ] if isinstance(watched_rows, list) else []
+    requested_account = resolve_account_name(args.conta, status_accounts) if args.conta else None
+    target_rows = heartbeat.get("targets", [])
+    targets = [target for target in target_rows if isinstance(target, dict)] if isinstance(target_rows, list) else []
+    watches_requested_account = not args.conta or any(
+        not str(target.get("conta") or "").strip()
+        or resolve_account_name(target.get("conta"), status_accounts) == requested_account
+        for target in targets
+    )
+
+    if heartbeat["alive"] and (not args.conta or requested_account) and watches_requested_account:
+        status = str(heartbeat.get("status") or "?")
+        if compact:
+            matches = _matching_target_hits(targets, status_accounts)
+            total_drops = sum(max(0, int(hit.get("qtd") or 0)) for hit in matches)
+            if matches:
+                last_drop = str(matches[-1].get("time") or "hora desconhecida")
+                drops_text = f"{total_drops} unidade(s) em {len(matches)} drop(s); último: {last_drop}"
+            else:
+                drops_text = "nenhum drop registado para estes alvos ainda"
+            state_labels = {
+                "active": "ATIVA A VIGIAR",
+                "waiting_for_targets": "ATIVA À ESPERA DE ALVOS",
+                "save_read_error": "ATIVA COM ERRO DE SAVE",
+                "partial_warning": "ATIVA COM AVISO",
+                "account_not_found": "ATIVA, CONTA NÃO ENCONTRADA",
+                "no_accounts": "ATIVA, SEM CONTAS",
+                "starting": "A ARRANCAR",
+                "scanning": "A LER SAVES",
+                "error": "ATIVA COM ERRO",
+            }
+            unreadable = heartbeat.get("unreadable_accounts", [])
+            unreadable_count = len(unreadable) if isinstance(unreadable, list) else 0
+            print(
+                f"[{now_label}] {state_labels.get(status, 'VIGIA ATIVA')} | "
+                f"última leitura: {heartbeat.get('updated_at', '?')} ({age:.1f}s) | "
+                f"{heartbeat.get('target_count', len(targets))} alvo(s), "
+                f"saves com erro: {unreadable_count} | {drops_text}",
+                flush=True,
+            )
+        else:
+            print(f"VIGIA ATIVO — {heartbeat.get('target_count', len(targets))} alvo(s), estado: {status}.")
+            _print_watch_summary(targets, status_accounts)
+            print("Contas vigiadas: " + (", ".join(account["name"] for account in watched_accounts) or "nenhuma") + ".")
+            if args.conta:
+                print(f"Conta pedida: {args.conta} -> {requested_account}.")
+            print(f"Ultima verificacao: {heartbeat.get('updated_at', '?')}; intervalo: {heartbeat.get('interval_seconds', '?')}s.")
+
+        if status == "no_accounts":
+            print("ERRO: o vigia esta vivo, mas nao carregou contas. Confirma config/baus.json.")
+        if status == "account_not_found":
+            print("ERRO: a conta associada a um alvo nao foi encontrada no ficheiro de contas.")
+        if status in {"starting", "scanning"} and not compact:
+            print("VIGIA A ARRANCAR — a primeira leitura dos saves ainda esta em curso.")
+            return 3
+        unreadable = heartbeat.get("unreadable_accounts", [])
+        if isinstance(unreadable, list) and unreadable:
+            if not compact:
+                print("Saves com erro de leitura: " + ", ".join(str(name) for name in unreadable))
+        if heartbeat.get("error"):
+            if not compact:
+                print("Ultimo erro do vigia: " + str(heartbeat["error"]))
+        if status in {"no_accounts", "save_read_error", "partial_warning", "account_not_found", "error"} or heartbeat.get("error") or unreadable:
+            if not compact:
+                print("AVISO: processo ativo, mas ha erros que podem impedir alguns alertas; corrige os detalhes acima.")
+            return 2
+        if status in {"starting", "scanning"}:
+            return 3
+        if status == "waiting_for_targets":
+            if not compact:
+                print("VIGIA ATIVO, a espera — clica Farmar na dashboard para comecar os alertas.")
+            return 4
+        return 0
+
+    if heartbeat["alive"] and heartbeat.get("status") in {"starting", "scanning"}:
+        if compact:
+            print(f"[{now_label}] VIGIA A ARRANCAR — primeira leitura dos saves ainda em curso.", flush=True)
+        else:
+            print("VIGIA A ARRANCAR — primeira leitura dos saves ainda em curso.")
+        return 3
+    if heartbeat["alive"] and args.conta and not requested_account:
+        names = ", ".join(account["name"] for account in status_accounts) or "nenhuma"
+        print(f"[{now_label}] VIGIA ATIVO, mas conta '{args.conta}' não configurada: {names}." if compact else f"VIGIA ATIVO, mas a conta '{args.conta}' nao esta na lista configurada: {names}.")
+        return 2
+    if heartbeat["alive"] and args.conta and not watches_requested_account:
+        print(f"[{now_label}] VIGIA ATIVO, mas sem alvo associado a '{requested_account}'." if compact else f"VIGIA ATIVO, mas nao tem alvo associado a '{requested_account}'.")
+        return 2
+    if compact:
+        print(f"[{now_label}] VIGIA INATIVO — sem heartbeat recente. Abre o run.bat e deixa-o aberto.", flush=True)
+    else:
+        print("VIGIA INATIVO — sem heartbeat recente. Abre o run.bat e deixa-o aberto.")
+    return 1
+
+
+def _status_follow(args) -> int:
+    interval = max(1.0, min(float(args.status_interval), 300.0))
+    seen_hits = {
+        _status_hit_key(hit)
+        for hit in _watch_data()["hits"]
+        if isinstance(hit, dict)
+    }
+    print(
+        f"[FARM] A acompanhar o status de {interval:g} em {interval:g}s sem limpar o ecrã. "
+        "Ctrl+C para parar; os novos drops aparecem abaixo.",
+        flush=True,
+    )
+    first = True
+    try:
+        while True:
+            _status_report(args, compact=not first)
+            first = False
+            for hit in _watch_data()["hits"]:
+                if not isinstance(hit, dict):
+                    continue
+                signature = _status_hit_key(hit)
+                if signature in seen_hits:
+                    continue
+                seen_hits.add(signature)
+                timestamp = str(hit.get("time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                print(
+                    f"\a[FARM] NOVO DROP DETETADO — {hit.get('name') or '?'} | "
+                    f"Conta: {hit.get('conta') or '?'} | +{hit.get('qtd') or 0} | {timestamp}",
+                    flush=True,
+                )
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n[FARM] Acompanhamento do status parado; a vigia de saves continua ativa.", flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Vigia os itens farmados e alerta quando aparecem nos saves.")
     parser.add_argument("--watch", action="store_true", help="vigia continuamente, consultando a cada 2 segundos")
-    parser.add_argument("--status", action="store_true", help="mostra se o vigia de alertas está ativo")
+    parser.add_argument("--status", action="store_true", help="acompanha continuamente o vigia; nao limpa o terminal")
+    parser.add_argument("--once", action="store_true", help="com --status, mostra o estado uma vez e termina")
+    parser.add_argument("--status-interval", type=float, default=5.0, help="segundos entre atualizacoes do status (predefinicao 5)")
     parser.add_argument("--check-running", action="store_true", help="verifica o bloqueio do processo sem iniciar outra vigia")
     parser.add_argument("--discord-setup", action="store_true", help="guarda o webhook e o ID opcional do utilizador num .env local")
     parser.add_argument("--test-discord", action="store_true", help="envia uma mensagem de teste para o webhook configurado")
@@ -1188,79 +1376,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{acknowledge_hits(args.ack, args.all or not args.ack)} alerta(s) confirmado(s).", flush=True)
         return 0
     if args.status:
-        webhook_url, mention_id = tbh_discord.discord_settings()
-        if not webhook_url:
-            print(f"Discord: nao configurado ({tbh_discord.WEBHOOK_ENV} em .env).")
-        elif not tbh_discord.valid_webhook_url(webhook_url):
-            print("Discord: URL configurado, mas formato invalido.")
-        else:
-            print("Discord: webhook configurado; " + ("mencao autorizada configurada." if mention_id and tbh_discord.valid_discord_user_id(mention_id) else "sem ID valido para mencionar robs."))
-        heartbeat = watcher_status(interval=args.interval)
-        heartbeat["process_running"] = _watch_process_running()
-        heartbeat["alive"] = heartbeat["alive"] and heartbeat["process_running"]
-        if heartbeat["process_running"] and not heartbeat["alive"]:
-            print(f"VIGIA PRESO OU SEM HEARTBEAT — o processo existe, mas nao atualiza ha {heartbeat['age_seconds']:.1f}s.")
-            print("Os alertas nao estao confirmados; verifica a janela do run.bat e os erros de leitura.")
-            return 2
-        account_rows = heartbeat.get("accounts", [])
-        status_accounts = [
-            {"name": str(name).strip()}
-            for name in account_rows
-            if isinstance(name, str) and name.strip()
-        ] if isinstance(account_rows, list) else []
-        watched_rows = heartbeat.get("watched_accounts", account_rows)
-        watched_accounts = [
-            {"name": str(name).strip()}
-            for name in watched_rows
-            if isinstance(name, str) and name.strip()
-        ] if isinstance(watched_rows, list) else []
-        requested_account = resolve_account_name(args.conta, status_accounts) if args.conta else None
-        target_rows = heartbeat.get("targets", [])
-        targets = [target for target in target_rows if isinstance(target, dict)] if isinstance(target_rows, list) else []
-        watches_requested_account = not args.conta or any(
-            not str(target.get("conta") or "").strip()
-            or resolve_account_name(target.get("conta"), status_accounts) == requested_account
-            for target in targets
-        )
-        if heartbeat["alive"] and (not args.conta or requested_account) and watches_requested_account:
-            status = str(heartbeat.get("status") or "?")
-            print(f"VIGIA ATIVO — {heartbeat.get('target_count', len(targets))} alvo(s), estado: {status}.")
-            _print_watch_summary(targets, status_accounts)
-            print("Contas vigiadas: " + (", ".join(account["name"] for account in watched_accounts) or "nenhuma") + ".")
-            if args.conta:
-                print(f"Conta pedida: {args.conta} -> {requested_account}.")
-            print(f"Ultima verificacao: {heartbeat.get('updated_at', '?')}; intervalo: {heartbeat.get('interval_seconds', '?')}s.")
-            if status == "no_accounts":
-                print("ERRO: o vigia esta vivo, mas nao carregou contas. Confirma config/baus.json.")
-            if status == "account_not_found":
-                print("ERRO: a conta associada a um alvo nao foi encontrada no ficheiro de contas.")
-            if status in {"starting", "scanning"}:
-                print("VIGIA A ARRANCAR — a primeira leitura dos saves ainda esta em curso.")
-                return 3
-            unreadable = heartbeat.get("unreadable_accounts", [])
-            if isinstance(unreadable, list) and unreadable:
-                print("Saves com erro de leitura: " + ", ".join(str(name) for name in unreadable))
-            if heartbeat.get("error"):
-                print("Ultimo erro do vigia: " + str(heartbeat["error"]))
-            if status in {"no_accounts", "save_read_error", "partial_warning", "account_not_found", "error"} or heartbeat.get("error") or unreadable:
-                print("AVISO: processo ativo, mas ha erros que podem impedir alguns alertas; corrige os detalhes acima.")
-                return 2
-            if status == "waiting_for_targets":
-                print("VIGIA ATIVO, a espera — clica Farmar na dashboard para comecar os alertas.")
-                return 4
-            return 0
-        if heartbeat["alive"] and heartbeat.get("status") in {"starting", "scanning"}:
-            print("VIGIA A ARRANCAR — primeira leitura dos saves ainda em curso.")
-            return 3
-        if heartbeat["alive"] and args.conta and not requested_account:
-            names = ", ".join(account["name"] for account in status_accounts) or "nenhuma"
-            print(f"VIGIA ATIVO, mas a conta '{args.conta}' nao esta na lista configurada: {names}.")
-            return 2
-        if heartbeat["alive"] and args.conta and not watches_requested_account:
-            print(f"VIGIA ATIVO, mas nao tem alvo associado a '{requested_account}'.")
-            return 2
-        print("VIGIA INATIVO — sem heartbeat recente. Abre o run.bat e deixa-o aberto.")
-        return 1
+        if args.once:
+            return _status_report(args)
+        return _status_follow(args)
     if args.watch:
         lock_fd = _acquire_watch_lock()
         if lock_fd is None:

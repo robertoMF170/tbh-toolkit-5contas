@@ -29,7 +29,15 @@ def write_json(path, value):
         json.dump(value, fh)
 
 
-class TestAlertData(unittest.TestCase):
+class FarmAlertTestCase(unittest.TestCase):
+    def setUp(self):
+        # Polling may emit zone alerts by default; never let unit tests contact a real webhook.
+        sender_patch = mock.patch.object(alert.tbh_discord, "send_alert")
+        sender_patch.start()
+        self.addCleanup(sender_patch.stop)
+
+
+class TestAlertData(FarmAlertTestCase):
     def test_notify_drop_envia_discord_sem_impedir_alerta_local(self):
         hit = {"name": "Mystic Gloves (Divine) A", "conta": "Conta 1 (geek1781)", "qtd": 1}
         with (
@@ -142,7 +150,7 @@ class TestAlertData(unittest.TestCase):
             mock.patch.object(alert, "_print_watch_summary") as print_summary,
             redirect_stdout(output),
         ):
-            result = alert.main(["--status", "--conta", "geek1781"])
+            result = alert.main(["--status", "--once", "--conta", "geek1781"])
         self.assertEqual(result, 0)
         self.assertIn("VIGIA ATIVO", output.getvalue())
         self.assertIn("Contas vigiadas: Conta 1 (geek1781)", output.getvalue())
@@ -151,6 +159,61 @@ class TestAlertData(unittest.TestCase):
             [{"name": "Shadow Bow", "conta": "geek1781"}],
             [{"name": "Conta 1 (geek1781)"}],
         )
+
+    def test_status_por_padrao_fica_em_loop_e_atualiza_sem_limpar(self):
+        heartbeat = {
+            "alive": True,
+            "age_seconds": 1,
+            "accounts": ["Conta 1"],
+            "watched_accounts": ["Conta 1"],
+            "targets": [{"name": "Shadow Bow", "conta": ""}],
+            "target_count": 1,
+            "status": "active",
+            "updated_at": "2026-04-01T12:00:00",
+            "interval_seconds": 2,
+            "unreadable_accounts": [],
+        }
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert, "watcher_status", return_value=heartbeat) as get_status,
+            mock.patch.object(alert, "_watch_process_running", return_value=True),
+            mock.patch.object(alert, "_print_watch_summary"),
+            mock.patch.object(alert, "_matching_target_hits", return_value=[]),
+            mock.patch.object(alert, "_watch_data", return_value={"targets": [], "hits": []}),
+            mock.patch.object(alert.tbh_discord, "discord_settings", return_value=("", "")),
+            mock.patch.object(alert.time, "sleep", side_effect=[None, KeyboardInterrupt]) as sleep,
+            redirect_stdout(output),
+        ):
+            result = alert.main(["--status", "--status-interval", "5"])
+
+        text = output.getvalue()
+        self.assertEqual(result, 0)
+        self.assertEqual(get_status.call_count, 2)
+        self.assertEqual(sleep.call_args_list, [mock.call(5.0), mock.call(5.0)])
+        self.assertIn("sem limpar o ecrã", text)
+        self.assertIn("VIGIA ATIVO", text)
+        self.assertIn("ATIVA A VIGIAR", text)
+        self.assertIn("2026-04-01T12:00:00", text)
+        self.assertNotIn("\x1b[2J", text)
+        self.assertIn("Acompanhamento do status parado", text)
+
+    def test_status_loop_avisa_quando_deteta_novo_drop(self):
+        hit = {"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1, "time": "2026-04-01T12:01:00"}
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert, "_status_report", return_value=0),
+            mock.patch.object(alert, "_watch_data", side_effect=[
+                {"hits": []},
+                {"hits": [hit]},
+            ]),
+            mock.patch.object(alert.time, "sleep", side_effect=KeyboardInterrupt),
+            redirect_stdout(output),
+        ):
+            result = alert.main(["--status", "--status-interval", "5"])
+
+        self.assertEqual(result, 0)
+        self.assertIn("NOVO DROP DETETADO — Shadow Bow", output.getvalue())
+        self.assertIn("Conta: Conta 1 | +1 | 2026-04-01T12:01:00", output.getvalue())
 
     def test_resumo_mostra_unidades_encontradas_por_alvo(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -496,7 +559,7 @@ class TestAlertData(unittest.TestCase):
         self.assertEqual(alert.find_new_drops(previous, current, targets), [])
 
 
-class TestFarmZoneValidation(unittest.TestCase):
+class TestFarmZoneValidation(FarmAlertTestCase):
     NORMAL_DROP = [[1, 1, 10, 0, "", 0, 0, 0, 0, 0]]
     TORMENT_DROP = [[1, 1, 90, 3, "", 0, 0, 0, 0, 0]]
 
