@@ -576,14 +576,23 @@ def _print_watch_summary(targets: list[dict], accounts: list[dict],
     )
 
 
+_DROP_STAGES_CACHE = {}
+
+
 def _drop_stages_for_name(name: str) -> list:
     """Devolve zonas conhecidas para o item usando o mesmo mapa da dashboard."""
+    cache_key = str(name or "").casefold()
+    if cache_key in _DROP_STAGES_CACHE:
+        return _DROP_STAGES_CACHE[cache_key]
     try:
         import tbh_farm
         stages = tbh_farm.drop_stages_for_name(name)
-        return stages if isinstance(stages, list) else []
+        stages = stages if isinstance(stages, list) else []
     except (Exception, SystemExit):
-        return []
+        stages = []
+    if stages:
+        _DROP_STAGES_CACHE[cache_key] = stages
+    return stages
 
 
 def _canonical_drop_zones(stages: list) -> list[tuple[int, int, int, bool]]:
@@ -673,13 +682,9 @@ def _zone_status_key(target: dict, account_name: str) -> str:
 
 def _zone_status_signature(status: str, zone: dict, zones: list,
                             reason: str) -> str:
-    # Uma mudança de fase gera aviso; mudanças só na onda não geram spam.
-    phase = [
-        zone.get("key"), zone.get("act"), zone.get("no"),
-        zone.get("diff_index"), bool(zone.get("plague")),
-    ]
+    # Só notifica quando muda o resultado ou as zonas-base, nunca a cada fase/onda.
     return json.dumps(
-        [status, phase, zones, reason],
+        [status, zones, reason],
         ensure_ascii=True,
         separators=(",", ":"),
         default=str,
@@ -837,6 +842,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         if key in active_zone_keys
     }
     zone_notifications = []
+    zone_keys_seen = set()
     if callable(zone_reader) or zone_snapshots:
         for target in targets:
             requested_account = str(target.get("conta") or "").strip()
@@ -853,8 +859,6 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             except Exception:
                 drop_stages = []
             for account in target_accounts:
-                if account["name"].casefold() in failed_accounts and account["name"] not in zone_snapshots:
-                    continue
                 if account["name"] in zone_snapshots:
                     zone = zone_snapshots[account["name"]]
                 elif callable(zone_reader):
@@ -870,6 +874,9 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                 status_key = _zone_status_key(target, account["name"])
                 signature = _zone_status_signature(status, zone, zones, reason)
                 next_zone_statuses[status_key] = signature
+                if status_key in zone_keys_seen:
+                    continue
+                zone_keys_seen.add(status_key)
                 if old_zone_statuses.get(status_key) == signature:
                     continue
                 zone_notifications.append({
@@ -1026,7 +1033,7 @@ def _collect_discord_setup(show_instructions: bool = True) -> bool:
 
 
 def _discord_prompt() -> int:
-    print("\n[Discord] O envio so acontece quando a vigia encontrar um drop novo.", flush=True)
+    print("\n[Discord] O envio acontece quando a vigia encontra um drop novo ou deteta uma mudanca na zona da farm.", flush=True)
     if not _ask_yes_no("Queres receber notificacoes no Discord? [S/N]: "):
         tbh_discord.set_discord_enabled(False)
         print("Discord desligado. A vigia local continua ativa.", flush=True)

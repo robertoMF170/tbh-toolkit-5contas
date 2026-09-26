@@ -472,6 +472,50 @@ class TestFarmZoneValidation(unittest.TestCase):
         self.assertEqual(unknown_save, "verify")
         self.assertEqual(unknown_item, "verify")
 
+    def test_scan_devolve_zona_junto_com_inventario(self):
+        class CombinedInventory(FakeInventory):
+            def itens_da_conta_com_zona(self, save_path, game_data, market_names):
+                items, deleted = self.itens_da_conta_detalhado(save_path, game_data, market_names)
+                return items, deleted, {"key": 1101, "act": 1, "no": 1, "label": "1-1 Normal"}
+
+        zones = {}
+        with (
+            mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+            mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+            mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+        ):
+            snapshots, failed = alert.scan_inventories(
+                [{"name": "Conta 1", "save": json.dumps({"Shadow Bow": 2})}],
+                {"Shadow Bow"}, CombinedInventory(), zone_snapshots=zones,
+            )
+        self.assertEqual(snapshots, {"Conta 1": {"Shadow Bow": 2}})
+        self.assertEqual(failed, set())
+        self.assertEqual(zones["Conta 1"]["key"], 1101)
+
+    def test_save_ilegivel_notifica_verifica_zona_so_uma_vez(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": ""}], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": "broken"}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            zone_alerts = []
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+                mock.patch.object(alert, "_drop_stages_for_name", return_value=self.NORMAL_DROP),
+            ):
+                for _ in range(2):
+                    alert.poll_once(
+                        state, watch, accounts, prices, FakeInventory(), lambda _hit: None,
+                        zone_reader=lambda _save: {},
+                        notify_zone=zone_alerts.append,
+                    )
+            self.assertEqual([item["status"] for item in zone_alerts], ["verify"])
+
     def test_poll_notifica_status_inicial_e_so_repete_ao_mudar_classificacao(self):
         with tempfile.TemporaryDirectory() as tmp:
             watch = os.path.join(tmp, "watch.json")
@@ -536,11 +580,18 @@ class TestFarmZoneValidation(unittest.TestCase):
         self.assertIn("1-2 Normal", output.getvalue())
         send.assert_called_once_with(alert_data)
 
+    def test_plague_fora_da_zona_do_item_e_incorreta(self):
+        status, _, _ = alert._evaluate_zone(
+            {"act": 22, "no": 2, "diff": "PLAGUE", "diff_index": None, "plague": True},
+            self.TORMENT_DROP,
+        )
+        self.assertEqual(status, "incorrect")
+
     def test_leitor_de_save_devolve_stage_e_plague_sem_inventar_dificuldade(self):
         import tbh_inventario as inventory
 
         normal_save = {"commonSaveData": {"currentStageKey": 1101, "currentStageWave": 4}}
-        plague_save = {"commonSaveData": {"currentStageKey": 201302}}
+        plague_save = {"commonSaveData": {"currentStageKey": 22002}}
         stages = {1101: {"act": 1, "no": 1, "diff": "NORMAL"}}
         with (
             mock.patch.object(inventory, "_save_legivel", return_value="save"),

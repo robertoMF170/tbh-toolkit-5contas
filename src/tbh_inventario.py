@@ -838,19 +838,21 @@ HERO_NOMES = {101: "Knight", 201: "Ranger", 301: "Sorcerer", 401: "Priest", 501:
 
 
 _STAGE_INFO_CACHE = None
+_STAGE_INFO_LOADED = False
 
 
 def _carregar_stages() -> dict:
     """Mapa stageKey -> info (tbhdata/tbhStages.js descarregado do tbhindex.com)."""
-    global _STAGE_INFO_CACHE
-    if _STAGE_INFO_CACHE is not None:
-        return _STAGE_INFO_CACHE
+    global _STAGE_INFO_CACHE, _STAGE_INFO_LOADED
+    if _STAGE_INFO_LOADED:
+        return _STAGE_INFO_CACHE or {}
 
     f = _resolve("data", "tbhdata", "tbhStages.js")
     if not os.path.exists(f):
         for alt in [os.path.join(ROOT, "tbhdata", "tbhStages.js"), os.path.join(BASE, "tbhdata", "tbhStages.js")]:
             if os.path.exists(alt): f = alt; break
     if not os.path.exists(f):
+        _STAGE_INFO_LOADED = True
         return {}
     try:
         m = re.search(r"JSON\.parse\(`(\{.*?\})`\)",
@@ -859,6 +861,7 @@ def _carregar_stages() -> dict:
             return {}
         d = json.loads(m.group(1))
         _STAGE_INFO_CACHE = {s["key"]: s for s in d.get("stages", [])}
+        _STAGE_INFO_LOADED = True
         return _STAGE_INFO_CACHE
     except Exception:
         return {}
@@ -880,9 +883,9 @@ def _stage_txt(key, stages: dict, wave=None) -> str:
         txt = str(s.get("act", "?")) + "-" + str(s.get("no", "?"))
         dif = _DIF_LABEL.get(s.get("diff"), s.get("diff", ""))
         return txt + " " + dif if dif else txt
-    # plague: 201302 -> act 22, plague 02 (fora do mapa estatico)
-    if 200000 < k < 300000:
-        act = 21 + (k // 1000) % 100
+    # chaves de Plague codificam o ato no milhar e o andar nas duas últimas casas.
+    if 20000 <= k < 30000:
+        act = (k // 1000) % 100
         pp = k % 100
         return str(act) + "-" + str(pp) + " Plague"
     return ""
@@ -908,8 +911,8 @@ def _zona_do_save_data(p: dict) -> dict:
         except (TypeError, ValueError):
             return result
         diff = str(stage.get("diff") or "").upper()
-    elif 200000 < key < 300000:
-        act = 21 + (key // 1000) % 100
+    elif 20000 <= key < 30000:
+        act = (key // 1000) % 100
         no = key % 100
         diff = "PLAGUE"
     else:
@@ -941,7 +944,7 @@ def _stage_dif(key, stages: dict) -> str:
     s = stages.get(k) or stages.get(str(k))
     if s:
         return _DIF_LABEL.get(s.get("diff"), s.get("diff", "")) or ""
-    if 200000 < k < 300000:
+    if 20000 <= k < 30000:
         return "Plague"
     return ""
 

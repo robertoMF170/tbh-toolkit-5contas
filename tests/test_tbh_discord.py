@@ -48,6 +48,18 @@ class TestDiscordFarmAlerts(unittest.TestCase):
         self.assertEqual(payload["allowed_mentions"]["users"], [self.user_id])
         self.assertEqual(payload["allowed_mentions"]["parse"], [])
 
+    def test_build_payload_formats_verify_and_correct_zone_statuses(self):
+        for status, heading in (
+            ("verify", "VERIFICA ZONA"),
+            ("correct", "ZONA CORRETA"),
+        ):
+            with self.subTest(status=status):
+                payload = discord.build_payload({
+                    "type": "zone_status", "status": status, "item": "Item",
+                    "conta": "Conta", "zone": "1-1 Normal",
+                })
+                self.assertIn(heading, payload["content"])
+
     def test_build_payload_does_not_ping_handle_or_everyone(self):
         payload = discord.build_payload(
             {"name": "Item", "conta": "geek1781", "qtd": 1},
