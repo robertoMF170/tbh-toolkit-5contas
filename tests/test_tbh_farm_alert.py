@@ -587,6 +587,14 @@ class TestFarmZoneValidation(unittest.TestCase):
         )
         self.assertEqual(status, "incorrect")
 
+    def test_plague_na_mesma_fase_sem_dificuldade_pede_verificacao(self):
+        plague_drop = [[22, 2, 90, 3, "", 0, 0, 0, 0, 1]]
+        status, _, _ = alert._evaluate_zone(
+            {"act": 22, "no": 2, "diff": "PLAGUE", "diff_index": None, "plague": True},
+            plague_drop,
+        )
+        self.assertEqual(status, "verify")
+
     def test_leitor_de_save_devolve_stage_e_plague_sem_inventar_dificuldade(self):
         import tbh_inventario as inventory
 
@@ -610,7 +618,11 @@ class TestFarmZoneValidation(unittest.TestCase):
         self.assertEqual(plague["label"], "22-2 Plague")
         self.assertEqual((plague["act"], plague["no"], plague["diff_index"]), (22, 2, None))
         status, _, _ = alert._evaluate_zone(plague, self.TORMENT_DROP)
-        self.assertEqual(status, "verify")
+        self.assertEqual(status, "incorrect")
+        status_same_place, _, _ = alert._evaluate_zone(
+            plague, [[22, 2, 90, 3, "", 0, 0, 0, 0, 1]],
+        )
+        self.assertEqual(status_same_place, "verify")
 
 
 if __name__ == "__main__":
