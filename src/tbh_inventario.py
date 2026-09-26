@@ -282,14 +282,7 @@ def itens_da_conta(save_path: str, dados: dict, nomes_mercado=None) -> dict:
     return dict(cont)
 
 
-def itens_da_conta_detalhado(save_path: str, dados: dict, nomes_mercado=None):
-    """Le o save e devolve:
-      cont = Counter{nome: qtd} para itens com nome conhecido
-      del_cont = Counter{itemKey: qtd} para itens Deleted/desconhecidos
-      motivos = {nome_or_itemKey: motivo} (para debug, opcional)
-    Equipados são excluidos (não se vendem).
-    """
-    p = _es3_decrypt(_save_legivel(save_path))
+def _itens_do_save_data(p: dict, dados: dict, nomes_mercado=None):
     por_uid = {i.get("UniqueId"): i for i in p.get("itemSaveDatas", [])}
     equipados = set()
     for h in p.get("heroSaveDatas", []):
@@ -314,6 +307,19 @@ def itens_da_conta_detalhado(save_path: str, dados: dict, nomes_mercado=None):
                 # Deleted / ItemKey obsoleto apos update
                 del_cont[str(ik)] += 1
     return cont, del_cont
+
+
+def itens_da_conta_detalhado(save_path: str, dados: dict, nomes_mercado=None):
+    """Le o save e devolve quantidades conhecidas e ItemKeys Deleted/desconhecidos."""
+    p = _es3_decrypt(_save_legivel(save_path))
+    return _itens_do_save_data(p, dados, nomes_mercado)
+
+
+def itens_da_conta_com_zona(save_path: str, dados: dict, nomes_mercado=None):
+    """Lê itens e zona do mesmo save para a vigia não o desencriptar novamente."""
+    p = _es3_decrypt(_save_legivel(save_path))
+    itens, deleted = _itens_do_save_data(p, dados, nomes_mercado)
+    return itens, deleted, _zona_do_save_data(p)
 
 
 def resumo_vendavel(save_path: str, dados: dict, precos: dict):
@@ -882,13 +888,11 @@ def _stage_txt(key, stages: dict, wave=None) -> str:
     return ""
 
 
-def zona_atual_da_conta(save_path: str) -> dict:
-    """Lê a zona atual do save; devolve campos estruturados ou {} se indisponível."""
+def _zona_do_save_data(p: dict) -> dict:
+    common = p.get("commonSaveData") or {}
     try:
-        p = _es3_decrypt(_save_legivel(save_path))
-        common = p.get("commonSaveData") or {}
         key = int(common.get("currentStageKey") or 0)
-    except Exception:
+    except (TypeError, ValueError):
         return {}
     if key <= 0:
         return {}
@@ -919,6 +923,14 @@ def zona_atual_da_conta(save_path: str) -> dict:
         "plague": act >= 21 or diff == "PLAGUE",
     })
     return result
+
+
+def zona_atual_da_conta(save_path: str) -> dict:
+    """Lê a zona atual do save; devolve campos estruturados ou {} se indisponível."""
+    try:
+        return _zona_do_save_data(_es3_decrypt(_save_legivel(save_path)))
+    except Exception:
+        return {}
 
 
 def _stage_dif(key, stages: dict) -> str:

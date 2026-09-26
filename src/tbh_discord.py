@@ -207,9 +207,9 @@ def build_payload(hit: dict, mention_id: str = "", test: bool = False) -> dict:
     else:
         heading = "🧪 TESTE DO ALERTA DE FARM" if test else "🎉 ITEM ENCONTRADO!"
         content = (
-        f"{mention}{heading}\n"
-        f"**Item:** {str(hit.get('name') or '?')}\n"
-        f"**Conta:** {str(hit.get('conta') or '?')}\n"
+            f"{mention}{heading}\n"
+            f"**Item:** {str(hit.get('name') or '?')}\n"
+            f"**Conta:** {str(hit.get('conta') or '?')}\n"
             f"**Quantidade nova:** {hit.get('qtd', 1)}"
         )
     return {

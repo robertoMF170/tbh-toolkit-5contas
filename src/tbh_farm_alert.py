@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import hashlib
 import json
 import os
 import sys
@@ -313,8 +312,9 @@ _GAME_DATA_OWNER = None
 _LAST_SCAN_ERRORS = {}
 
 
-def scan_inventories(accounts: list[dict], market_names: set[str], inventory=None) -> tuple[dict, set[str]]:
-    """Devolve quantidades por conta e os nomes de contas cuja leitura falhou."""
+def scan_inventories(accounts: list[dict], market_names: set[str], inventory=None,
+                     zone_snapshots: dict | None = None) -> tuple[dict, set[str]]:
+    """Devolve inventários, zonas atuais opcionais e contas cuja leitura falhou."""
     global _GAME_DATA_CACHE, _GAME_DATA_OWNER
     if inventory is None:
         import tbh_inventario as inventory
@@ -340,9 +340,25 @@ def scan_inventories(accounts: list[dict], market_names: set[str], inventory=Non
     for account in accounts:
         name = account["name"]
         try:
-            items, _deleted = inventory.itens_da_conta_detalhado(
-                account["save"], _GAME_DATA_CACHE, market_names
-            )
+            combined_reader = getattr(type(inventory), "itens_da_conta_com_zona", None)
+            if getattr(inventory, "__name__", "") == "tbh_inventario":
+                combined_reader = getattr(inventory, "itens_da_conta_com_zona", None)
+            if callable(combined_reader):
+                try:
+                    items, _deleted, zone = inventory.itens_da_conta_com_zona(
+                        account["save"], _GAME_DATA_CACHE, market_names
+                    )
+                except Exception:
+                    items, _deleted = inventory.itens_da_conta_detalhado(
+                        account["save"], _GAME_DATA_CACHE, market_names
+                    )
+                else:
+                    if zone_snapshots is not None:
+                        zone_snapshots[name] = zone if isinstance(zone, dict) else {}
+            else:
+                items, _deleted = inventory.itens_da_conta_detalhado(
+                    account["save"], _GAME_DATA_CACHE, market_names
+                )
             snapshots[name] = {str(item): int(count) for item, count in items.items()}
             if name in _LAST_SCAN_ERRORS:
                 print(f"[FARM] Leitura do save recuperada: {name}.", flush=True)
@@ -619,11 +635,8 @@ def _evaluate_zone(zone: dict, drop_stages: list) -> tuple[str, str, list[tuple[
         return "verify", "O save não contém uma zona que eu consiga comparar.", zones
 
     plague = bool(zone.get("plague"))
-    same_place = [candidate for candidate in zones if candidate[0] == act and candidate[1] == no and candidate[3] == plague]
     if plague and zone.get("diff_index") not in {0, 1, 2, 3}:
-        if same_place:
-            return "verify", "A dificuldade atual de Plague não está indicada no save.", zones
-        return "incorrect", "Esta fase não está entre as zonas de drop conhecidas do item.", zones
+        return "verify", "A dificuldade atual de Plague não está indicada no save.", zones
 
     try:
         diff_index = int(zone.get("diff_index"))
@@ -646,24 +659,24 @@ def _zone_status_key(target: dict, account_name: str) -> str:
 
 def _zone_status_signature(status: str, zone: dict, zones: list,
                             reason: str) -> str:
+    # Detecta mudança de fase, sem alertar de novo a cada onda da mesma fase.
     zone_identity = [
         zone.get("key"), zone.get("act"), zone.get("no"),
         zone.get("diff_index"), bool(zone.get("plague")),
         _zone_display(zone),
     ]
-    payload = json.dumps(
+    return json.dumps(
         [status, zone_identity, zones, reason],
         ensure_ascii=True,
         separators=(",", ":"),
         default=str,
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def notify_zone_status(alert_data: dict) -> None:
     labels = {
         "correct": "ZONA CORRETA",
-        "incorrect": "ZONA INCORRETA",
+        "incorrect": "ZONA INCORRETA — VERIFICA ZONA",
         "verify": "VERIFICA ZONA",
     }
     label = labels.get(alert_data.get("status"), "VERIFICA ZONA")
@@ -717,16 +730,20 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     if not isinstance(old_baselines, dict):
         old_baselines = {}
 
-    current, failed = scan_inventories(accounts, _market_names(targets, price_file), inventory) if accounts else ({}, set())
+    if inventory is None:
+        try:
+            import tbh_inventario as inventory
+        except (Exception, SystemExit):
+            inventory = None
+    zone_snapshots = {}
+    current, failed = scan_inventories(
+        accounts, _market_names(targets, price_file), inventory,
+        zone_snapshots=zone_snapshots,
+    ) if accounts else ({}, set())
+    if not callable(zone_reader) and zone_snapshots and inventory is not None:
+        zone_reader = lambda save_path: {}
     if zone_reader is None:
-        if inventory is None:
-            try:
-                import tbh_inventario as save_reader
-                zone_reader = getattr(save_reader, "zona_atual_da_conta", None)
-            except (Exception, SystemExit):
-                zone_reader = None
-        else:
-            zone_reader = getattr(inventory, "zona_atual_da_conta", None)
+        zone_reader = getattr(inventory, "zona_atual_da_conta", None) if inventory is not None else None
     failed_accounts = {str(name).casefold() for name in failed}
     previous_accounts = {str(name).casefold(): items for name, items in previous.items()}
     for name in failed:
@@ -790,9 +807,9 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     old_zone_statuses = old_state.get("zone_statuses", {}) if isinstance(old_state, dict) else {}
     if not isinstance(old_zone_statuses, dict):
         old_zone_statuses = {}
-    next_zone_statuses = {}
+    next_zone_statuses = dict(old_zone_statuses) if zone_reader is None and not zone_snapshots else {}
     zone_notifications = []
-    if callable(zone_reader):
+    if callable(zone_reader) or zone_snapshots or accounts:
         for target in targets:
             requested_account = str(target.get("conta") or "").strip()
             if requested_account:
@@ -808,12 +825,19 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             except Exception:
                 drop_stages = []
             for account in target_accounts:
-                try:
-                    zone = zone_reader(account["save"]) or {}
-                except Exception:
+                if account["name"] in zone_snapshots:
+                    zone = zone_snapshots[account["name"]]
+                elif callable(zone_reader):
+                    try:
+                        zone = zone_reader(account["save"]) or {}
+                    except Exception:
+                        zone = {}
+                else:
                     zone = {}
                 if not isinstance(zone, dict):
                     zone = {}
+                if account["name"].casefold() in failed_accounts:
+                    continue
                 status, reason, zones = _evaluate_zone(zone, drop_stages)
                 status_key = _zone_status_key(target, account["name"])
                 signature = _zone_status_signature(status, zone, zones, reason)
