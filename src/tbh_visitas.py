@@ -174,10 +174,29 @@ def executar_acao_farm(pedido: dict) -> dict:
     action = str(pedido.get("action") or "").strip().lower()
     name = str(pedido.get("name") or "").strip()
     account = str(pedido.get("conta") or "").strip()
-    if action not in {"add", "remove", "ack", "status"}:
+    if action not in {"add", "remove", "ack", "status", "add-build"}:
         raise ValueError("Acao de farm desconhecida.")
     if action != "status" and (not name or len(name) > 200 or len(account) > 120):
         raise ValueError("Nome do item ou conta invalido.")
+
+    if action == "add-build":
+        from urllib.parse import urlsplit
+        from tbh_site import normalize_url, resolve_url, load_urls, save_urls
+
+        parsed = urlsplit(normalize_url(name))
+        if parsed.scheme != "https" or parsed.netloc.casefold() not in {"tbhindex.com", "www.tbhindex.com"}:
+            raise ValueError("O link tem de ser de uma build do tbhindex.com.")
+        build_url = resolve_url(normalize_url(name))
+        if not build_url:
+            raise ValueError("Nao encontrei essa build do tbhindex.com.")
+        urls = load_urls()
+        if build_url not in urls:
+            urls.append(build_url)
+            save_urls(urls)
+        if not generate_farm_dashboard():
+            raise RuntimeError("Nao foi possivel regenerar a dashboard.")
+        return {"ok": True, "changed": build_url not in urls[:-1], "action": action,
+                "message": "Build adicionada. A dashboard sera atualizada ao voltar a abrir."}
 
     import tbh_farm_alert as farm_alert
 
@@ -298,7 +317,7 @@ class VisitasHandler(BaseHTTPRequestHandler):
             return
         if relative_parts == ["minhas_builds.html"]:
             token = getattr(self.server, "tbh_farm_token", "")
-            corpo = corpo.replace(b"__TBH_FARM_API_TOKEN__", token.encode("ascii"))
+            corpo = corpo.replace(b"__TBH_FARM_API_TOKEN_VALUE__", token.encode("ascii"))
         self.send_response(200)
         self.send_header("Content-Type", tipos.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(corpo)))

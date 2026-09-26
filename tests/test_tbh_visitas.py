@@ -6,7 +6,7 @@ Cobertura:
   - registar (sessoes, eventos, github_click, associacoes cruzadas)
   - _associa (limite de 50 entradas)
   - _escrever_stats (totais, online, ordenacao, por_device sem id vazio)
-  - servidor HTTP real (CORS/OPTIONS, POST/GET da API, ficheiros, erros)
+  - servidor HTTP real (CORS/OPTIONS, APIs de visitas e farm, ficheiros/erros)
 
 Correr:  python -m unittest -v test_tbh_visitas
 """
@@ -20,13 +20,14 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tbh_visitas as sv
 
 
-AGORA = 1_000_000.0  # timestamp fixo para testes deterministas
+AGORA = 1_000_000.0
 
 
 def dados_vazios() -> dict:
@@ -34,8 +35,6 @@ def dados_vazios() -> dict:
 
 
 class TestCarregarGuardar(unittest.TestCase):
-    """Persistencia: roundtrip e tolerancia a ficheiros invalidos."""
-
     def test_carregar_inexistente_devolve_vazio(self):
         with tempfile.TemporaryDirectory() as tmp:
             dados = sv.carregar(os.path.join(tmp, "nao_existe.json"))
@@ -50,33 +49,27 @@ class TestCarregarGuardar(unittest.TestCase):
             caminho = os.path.join(tmp, "var", "visitas.json")
             sv.guardar(caminho, dados)
             self.assertTrue(os.path.isfile(caminho))
-            lido = sv.carregar(caminho)
-        self.assertEqual(lido, dados)
+            self.assertEqual(sv.carregar(caminho), dados)
 
     def test_carregar_json_corrompido(self):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = os.path.join(tmp, "visitas.json")
             with open(caminho, "w", encoding="utf-8") as fh:
                 fh.write("{isto nao e json valido")
-            dados = sv.carregar(caminho)
-        self.assertEqual(dados, {"ips": {}, "devices": {}})
+            self.assertEqual(sv.carregar(caminho), {"ips": {}, "devices": {}})
 
     def test_carregar_raiz_nao_dict(self):
         with tempfile.TemporaryDirectory() as tmp:
             caminho = os.path.join(tmp, "visitas.json")
             with open(caminho, "w", encoding="utf-8") as fh:
                 json.dump([1, 2, 3], fh)
-            dados = sv.carregar(caminho)
-        self.assertEqual(dados, {"ips": {}, "devices": {}})
+            self.assertEqual(sv.carregar(caminho), {"ips": {}, "devices": {}})
 
 
 class TestRegistar(unittest.TestCase):
-    """Logica de sessoes e eventos dentro de registar()."""
-
     def test_primeiro_ping_conta_visita(self):
         dados = dados_vazios()
-        mudou = sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA)
-        self.assertTrue(mudou)
+        self.assertTrue(sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA))
         self.assertEqual(dados["ips"]["1.1.1.1"]["visitas"], 1)
         self.assertEqual(dados["devices"]["dev-a"]["visitas"], 1)
         self.assertEqual(dados["ips"]["1.1.1.1"]["last"], AGORA)
@@ -85,27 +78,21 @@ class TestRegistar(unittest.TestCase):
     def test_mesma_sessao_nao_conta_duas_visitas(self):
         dados = dados_vazios()
         sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA)
-        mudou = sv.registar(dados, "1.1.1.1", "dev-a", "ping",
-                            agora=AGORA + 60)
-        # heartbeat dentro da sessao: so actualiza last
-        self.assertTrue(mudou)
+        self.assertTrue(sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA + 60))
         self.assertEqual(dados["ips"]["1.1.1.1"]["visitas"], 1)
         self.assertEqual(dados["ips"]["1.1.1.1"]["last"], AGORA + 60)
 
     def test_heartbeat_antigo_nao_muda_nada(self):
         dados = dados_vazios()
         sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA)
-        mudou = sv.registar(dados, "1.1.1.1", "dev-a", "ping",
-                            agora=AGORA - 10)
-        self.assertFalse(mudou)
+        self.assertFalse(sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA - 10))
         self.assertEqual(dados["ips"]["1.1.1.1"]["visitas"], 1)
         self.assertEqual(dados["ips"]["1.1.1.1"]["last"], AGORA)
 
     def test_gap_maior_que_sessao_conta_nova_visita(self):
         dados = dados_vazios()
         sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA)
-        sv.registar(dados, "1.1.1.1", "dev-a", "ping",
-                    agora=AGORA + sv.SESSAO_SEGUNDOS + 1)
+        sv.registar(dados, "1.1.1.1", "dev-a", "ping", agora=AGORA + sv.SESSAO_SEGUNDOS + 1)
         self.assertEqual(dados["ips"]["1.1.1.1"]["visitas"], 2)
 
     def test_evento_visit_nao_duplo_na_mesma_sessao(self):
@@ -124,9 +111,7 @@ class TestRegistar(unittest.TestCase):
     def test_github_click_incrementa_dois_registos(self):
         dados = dados_vazios()
         sv.registar(dados, "1.1.1.1", "dev-a", "github_click", agora=AGORA)
-        sv.registar(dados, "1.1.1.1", "dev-a", "GITHUB_CLICK",
-                    agora=AGORA + 1)
-        # nova sessao no 1.º clique conta a visita; 2.º e' so contador
+        sv.registar(dados, "1.1.1.1", "dev-a", "GITHUB_CLICK", agora=AGORA + 1)
         self.assertEqual(dados["ips"]["1.1.1.1"]["visitas"], 1)
         self.assertEqual(dados["ips"]["1.1.1.1"]["github"], 2)
         self.assertEqual(dados["devices"]["dev-a"]["github"], 2)
@@ -145,8 +130,6 @@ class TestRegistar(unittest.TestCase):
 
 
 class TestAssocia(unittest.TestCase):
-    """_associa: ignora vazio e limita a lista a 50 entradas."""
-
     def _rec(self):
         return sv._registo(dados_vazios(), "ips", "1.1.1.1", AGORA)
 
@@ -166,30 +149,15 @@ class TestAssocia(unittest.TestCase):
         self.assertNotIn("dev-01", rec["devices"])
         self.assertEqual(rec["devices"][-1], "dev-51")
 
-import time
-import http.client
-
 
 class TestEscreverStats(unittest.TestCase):
     def test_totais_online_e_ordenacao(self):
         dados = dados_vazios()
-        agora = time.time()
-        dados["ips"]["10.0.0.1"] = {
-            "visitas": 3, "github": 2, "last": agora - 5,
-            "devices": ["b", "a"],
-        }
-        dados["ips"]["10.0.0.2"] = {
-            "visitas": 1, "github": 1, "last": agora - 9999,
-            "devices": [],
-        }
-        dados["devices"]["dev-x"] = {
-            "visitas": 4, "github": 2, "last": agora - 10,
-            "ips": ["10.0.0.1"],
-        }
-        dados["devices"][""] = {
-            "visitas": 99, "github": 99, "last": agora - 1,
-            "ips": [],
-        }
+        agora = __import__("time").time()
+        dados["ips"]["10.0.0.1"] = {"visitas": 3, "github": 2, "last": agora - 5, "devices": ["b", "a"]}
+        dados["ips"]["10.0.0.2"] = {"visitas": 1, "github": 1, "last": agora - 9999, "devices": []}
+        dados["devices"]["dev-x"] = {"visitas": 4, "github": 2, "last": agora - 10, "ips": ["10.0.0.1"]}
+        dados["devices"][""] = {"visitas": 99, "github": 99, "last": agora - 1, "ips": []}
         stats = sv._escrever_stats(dados)
         self.assertEqual(stats["total_visitas"], 4)
         self.assertEqual(stats["total_github"], 3)
@@ -217,12 +185,13 @@ class TestServidorHTTP(unittest.TestCase):
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()
         self.root = self._dir.name
-        with open(os.path.join(self.root, "minhas_builds.html"), "w", encoding="utf-8") as f:
-            f.write("<html><body>ola builds</body></html>")
-        with open(os.path.join(self.root, "segredo.txt"), "w", encoding="utf-8") as f:
-            f.write("secreto")
+        with open(os.path.join(self.root, "minhas_builds.html"), "w", encoding="utf-8") as fh:
+            fh.write('<script>window.__TBH_FARM_API_TOKEN__="__TBH_FARM_API_TOKEN_VALUE__";</script>')
+        with open(os.path.join(self.root, "segredo.txt"), "w", encoding="utf-8") as fh:
+            fh.write("secreto")
         self.db = os.path.join(self.root, "var", "visitas.json")
         self._db_antigo = sv._DB_PATH[0]
+        self._active_antigo = sv._ACTIVE_SERVER[0]
         self.server = sv.arrancar(0, self.root, self.db)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -234,25 +203,32 @@ class TestServidorHTTP(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=5)
         sv._DB_PATH[0] = self._db_antigo
+        sv._ACTIVE_SERVER[0] = self._active_antigo
         self._dir.cleanup()
 
-    def _pedido(self, caminho, dados=None, metodo=None):
+    def _pedido(self, caminho, dados=None, metodo=None, headers=None):
         corpo = json.dumps(dados).encode("utf-8") if dados is not None else None
-        req = urllib.request.Request(
-            self.base + caminho, data=corpo,
-            method=metodo or ("POST" if corpo else "GET"),
-        )
+        req = urllib.request.Request(self.base + caminho, data=corpo,
+                                     method=metodo or ("POST" if corpo else "GET"), headers=headers or {})
         return urllib.request.urlopen(req, timeout=10)
 
-    def _pedido_erro(self, caminho, dados=None, metodo=None):
+    def _pedido_erro(self, caminho, dados=None, metodo=None, headers=None):
         try:
-            resp = self._pedido(caminho, dados, metodo)
+            resp = self._pedido(caminho, dados, metodo, headers)
         except urllib.error.HTTPError as exc:
             try:
                 return exc.code, exc.read()
             finally:
                 exc.close()
         self.fail("esperava HTTPError, obteve %s" % resp.status)
+
+    def _farm_headers(self, origin=None, token=None):
+        headers = {
+            "X-TBH-Farm-Token": token if token is not None else self.server.tbh_farm_token,
+        }
+        if origin is not None:
+            headers["Origin"] = origin
+        return headers
 
     def test_options_cors(self):
         req = urllib.request.Request(self.base + "/api/visitas", method="OPTIONS")
@@ -268,8 +244,7 @@ class TestServidorHTTP(unittest.TestCase):
             corpo = json.loads(resp.read().decode("utf-8"))
         self.assertTrue(corpo["ok"])
         self.assertEqual(corpo["stats"]["total_visitas"], 1)
-        dados = sv.carregar(self.db)
-        self.assertEqual(dados["devices"]["teste"]["visitas"], 1)
+        self.assertEqual(sv.carregar(self.db)["devices"]["teste"]["visitas"], 1)
 
     def test_post_ping_e_get_stats(self):
         with self._pedido("/api/visitas", {"device": "dev1", "event": "ping"}) as resp:
@@ -288,19 +263,60 @@ class TestServidorHTTP(unittest.TestCase):
         with self._pedido("/api/visitas", {"device": "dev1", "event": "github_click"}) as resp:
             corpo = json.loads(resp.read().decode("utf-8"))
         self.assertTrue(corpo["ok"])
-        # total_github soma apenas o grupo por_ip (1 ip => 1 clique),
-        # mas o registo do device tambem fica com +1.
         self.assertEqual(corpo["stats"]["total_github"], 1)
-        dados = sv.carregar(self.db)
-        self.assertEqual(dados["devices"]["dev1"]["github"], 1)
+        self.assertEqual(sv.carregar(self.db)["devices"]["dev1"]["github"], 1)
 
-    def test_index(self):
-        for caminho in ("/", "/index.html", "/minhas_builds.html"):
-            with self._pedido(caminho) as resp:
-                self.assertEqual(resp.status, 200)
-                self.assertIn("text/html", resp.headers["Content-Type"])
-                conteudo = resp.read()
-            self.assertIn(b"ola builds", conteudo)
+    def test_dashboard_injeta_token_por_resposta_e_nao_guarda_segredo(self):
+        with self._pedido("/") as resp:
+            html = resp.read().decode("utf-8")
+        self.assertIn(self.server.tbh_farm_token, html)
+        with open(os.path.join(self.root, "minhas_builds.html"), encoding="utf-8") as fh:
+            disk_html = fh.read()
+        self.assertIn("__TBH_FARM_API_TOKEN_VALUE__", disk_html)
+        self.assertNotIn(self.server.tbh_farm_token, disk_html)
+
+    def test_api_farm_get_exige_origem_local_e_token(self):
+        code, body = self._pedido_erro("/api/farm", metodo="GET")
+        self.assertEqual(code, 403)
+        self.assertIn("nao autorizado", json.loads(body.decode("utf-8"))["erro"])
+        code, _ = self._pedido_erro("/api/farm", metodo="GET", headers=self._farm_headers(origin="http://evil.example"))
+        self.assertEqual(code, 403)
+        with mock.patch.object(sv, "executar_acao_farm", return_value={"ok": True, "targets": [], "hits": []}):
+            with self._pedido("/api/farm", metodo="GET", headers=self._farm_headers(origin=self.base)) as resp:
+                self.assertEqual(json.loads(resp.read().decode("utf-8"))["targets"], [])
+
+    def test_api_farm_post_regista_item_sem_protocolo_do_browser(self):
+        with mock.patch.object(sv, "executar_acao_farm", return_value={
+            "ok": True, "changed": True, "action": "add", "message": "Alerta registado: Item",
+            "targets": [{"name": "Item", "conta": "geek1781"}], "hits": [],
+        }) as action:
+            with self._pedido("/api/farm", {"action": "add", "name": "Item", "conta": "geek1781"},
+                              headers=self._farm_headers(origin=self.base)) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["targets"], [{"name": "Item", "conta": "geek1781"}])
+        action.assert_called_once_with({"action": "add", "name": "Item", "conta": "geek1781"})
+
+    def test_api_farm_post_recusa_token_origem_conteudo_e_request_invalido(self):
+        code, _ = self._pedido_erro("/api/farm", {"action": "add", "name": "Item"},
+                                    headers={"Origin": self.base, "X-TBH-Farm-Token": "errado"})
+        self.assertEqual(code, 403)
+        code, _ = self._pedido_erro("/api/farm", {"action": "add", "name": "Item"},
+                                    headers={"Origin": "http://evil.example", "X-TBH-Farm-Token": self.server.tbh_farm_token})
+        self.assertEqual(code, 403)
+        code, _ = self._pedido_erro("/api/farm", {"action": "add", "name": "Item"},
+                                    headers={**self._farm_headers(origin=self.base), "Content-Type": "text/plain"})
+        self.assertEqual(code, 415)
+        with mock.patch.object(sv, "executar_acao_farm", side_effect=ValueError("Pedido invalido")):
+            code, _ = self._pedido_erro("/api/farm", {"action": "add", "name": ""},
+                                        headers=self._farm_headers(origin=self.base))
+        self.assertEqual(code, 400)
+
+    def test_dashboard_nao_publica_ficheiros_privados(self):
+        for caminho in ("/segredo.txt", "/.env", "/var/farm_watch.json", "/config/baus.json"):
+            code, body = self._pedido_erro(caminho)
+            self.assertIn(code, (403, 404))
+            self.assertNotIn(b"secreto", body)
 
     def test_traversal_bloqueado(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.porta, timeout=10)
@@ -323,21 +339,18 @@ class TestServidorHTTP(unittest.TestCase):
     def test_post_device_muito_longo(self):
         nome = "x" * 100
         with self._pedido("/api/visitas", {"device": nome}) as resp:
-            corpo = json.loads(resp.read().decode("utf-8"))
-        self.assertTrue(corpo["ok"])
+            self.assertTrue(json.loads(resp.read().decode("utf-8"))["ok"])
         dados = sv.carregar(self.db)
         self.assertIn("x" * 64, dados["devices"])
         self.assertNotIn(nome, dados["devices"])
-        for chave in dados["devices"]:
-            self.assertLessEqual(len(chave), 64)
+        self.assertTrue(all(len(key) <= 64 for key in dados["devices"]))
 
     def test_post_json_invalido(self):
         req = urllib.request.Request(self.base + "/api/visitas", data=b"{!!}", method="POST")
         with urllib.request.urlopen(req, timeout=10) as resp:
             corpo = json.loads(resp.read().decode("utf-8"))
         self.assertTrue(corpo["ok"])
-        dados = sv.carregar(self.db)
-        self.assertEqual([k for k in dados["devices"] if k], [])
+        self.assertEqual([key for key in sv.carregar(self.db)["devices"] if key], [])
 
 
 if __name__ == "__main__":

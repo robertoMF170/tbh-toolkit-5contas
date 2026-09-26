@@ -211,9 +211,9 @@ def handle_cli() -> list:
     args = [a for a in raw if a not in ("--sem-abrir", "--silencioso", "--so-html")]
     urls = load_urls()
     if not args:
-        return urls
-    if args[0] == "--install-protocol":
-        install_protocol()
+        return urls        if args[0] == "--install-protocol":
+            install_protocol()
+
     elif args[0] == "--add" and len(args) > 1:
         u = normalize_url(args[1])
         if u in urls:
@@ -1225,12 +1225,12 @@ function doImport(){
  box.textContent=cmd;
  box.classList.remove('hidden');
  box.onclick=()=>copyText(cmd).then(()=>toast('Comando copiado!'));
- try{location.href='tbh://add?url='+encodeURIComponent(u);}catch(e){}
- copyText(cmd).then(ok=>{
-  st.textContent=ok
-   ?'A ABRIR O PYTHON — se o browser perguntar, clica ABRIR. O site regenera e abre sozinho com a build nova. Se nao abriu nada, corre UMA VEZ no terminal: python tbh_site.py --install-protocol (ou usa o comando abaixo).'
-   :'Se nao abriu o Python, corre UMA VEZ no terminal: python tbh_site.py --install-protocol — ou cola o comando abaixo no terminal.';
- });
+ if(FARM_API_URL&&window.__TBH_FARM_API_TOKEN__){
+  farmApi('add-build',u,'').then(function(){st.textContent='A build foi adicionada. O run.bat vai atualizar a dashboard; se nao aparecer, fecha e abre a dashboard novamente.';}).catch(function(error){st.textContent=error.message+' Podes usar o comando manual abaixo.';});
+ }else{
+  st.textContent='Abre a dashboard pelo run.bat para importar builds sem permissao do browser. O comando manual fica abaixo.';
+ }
+ copyText(cmd).then(function(ok){if(ok)box.title='Comando manual copiado';});
 }
 document.getElementById('mgo').addEventListener('click',doImport);
 document.getElementById('mclose').addEventListener('click',closeImport);
@@ -1337,9 +1337,6 @@ function relocateFarmToBottom(i){
   // ajusta altura da faixa para a arvore nao ficar por baixo (max 38vh)
   // deixa treewrap respirar — com-farm ja tem bottom 220px no CSS
 }
-function farmEscape(value){
-  return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});
-}
 function farmAccountForButton(btn){
   var conta=btn.getAttribute('data-conta')||'';
   try{if(!conta&&typeof cur==='number'&&cur>=0&&B.urls&&B.urls[cur]){var m=(B.urls[cur]||'').match(/\|user=([^|]+)/);if(m)conta=m[1];}}catch(e){}
@@ -1367,11 +1364,6 @@ function farmAction(action,name,conta){
     toast((data.message||'Lista de alertas atualizada.')+' — o run.bat mantém a vigia ativa.');return data;
   }).catch(function(error){if(bar){bar.classList.add('show');bar.textContent=error.message||'Não foi possível falar com o run.bat. Abre-o e volta a tentar.';}throw error;});
 }
-window.farmToggle=function(btn){
-  if(btn.dataset.busy==='1')return;var name=btn.getAttribute('data-farm')||'';if(!name)return;
-  btn.dataset.busy='1';btn.disabled=true;
-  farmAction(btn.classList.contains('on')?'remove':'add',name,farmAccountForButton(btn)).catch(function(){}).finally(function(){btn.dataset.busy='';btn.disabled=false;});
-};
 function restoreFarmToSidebar(i){
   var dst = document.getElementById('farmBottom');
   var src = document.getElementById('sw'+i);
@@ -1384,48 +1376,6 @@ function restoreFarmToSidebar(i){
   }
   dst.classList.add('hidden');
   document.getElementById('buildview').classList.remove('with-farm');
-}
-function refreshFarmWatchBar(){
-  if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__){
-    renderFarmWatchBar(window.__FARM_WATCH__||{targets:[],hits:[]});
-    return;
-  }
-  farmApi().then(function(data){
-    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};
-    syncFarmButtons(window.__FARM_WATCH__);
-    renderFarmWatchBar(window.__FARM_WATCH__);
-  }).catch(function(){});
-}
-function renderFarmWatchBar(w){
-  var bar=document.getElementById('farmWatchBar');if(!bar||!w)return;
-  var targets=w.targets||[],allHits=w.hits||[],pending=allHits.filter(function(hit){return !hit.acknowledged;});
-  if(!targets.length&&!pending.length){bar.classList.remove('show');bar.innerHTML='';return;}
-  var html='<h4>🎯 ALERTAS DE FARM — <span style="color:#7ee787">'+targets.length+' alvo(s)</span> · atualização automática</h4>';
-  if(targets.length){
-    html+='<div class="fw-tags">';
-    targets.forEach(function(target){
-      var name=String(target.name||'?'),account=String(target.conta||''),quantity=0;
-      allHits.forEach(function(hit){
-        var wanted=account.trim().toLowerCase(),actual=String(hit.conta||'').trim().toLowerCase();
-        if(String(hit.name||'').trim().toLowerCase()===name.trim().toLowerCase()&&(!wanted||actual===wanted||actual.endsWith('('+wanted+')')))quantity+=Math.max(0,parseInt(hit.qtd,10)||0);
-      });
-      html+='<span class="fw-tag"><b>'+farmEscape(name)+'</b><span style="color:#a89878">'+farmEscape(account?' @ '+account:' @ todas')+' · '+quantity+' encontrada(s)</span><button type="button" data-farm-action="remove" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">Parar</button></span>';
-    });
-    html+='</div>';
-  }
-  pending.slice(-3).forEach(function(hit){
-    var name=String(hit.name||'?'),account=String(hit.conta||'?');
-    html+='<div class="fw-hit">🔔 <b>'+farmEscape(name)+'</b> @ '+farmEscape(account)+' ×'+(parseInt(hit.qtd,10)||1)+' — drop encontrado <button type="button" data-farm-action="ack" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">✓ Confirmar</button></div>';
-  });
-  html+='<div style="margin-top:6px;font-size:11px;color:#a89878;">O run.bat consulta os saves a cada 2 segundos em segundo plano. Nao precisas de autorizar Python ou pop-ups no browser.</div>';
-  bar.innerHTML=html;
-  bar.querySelectorAll('[data-farm-action]').forEach(function(button){
-    button.addEventListener('click',function(){
-      button.disabled=true;
-      farmAction(button.dataset.farmAction,button.dataset.name,button.dataset.conta).then(function(data){toast(data.message);}).catch(function(){}).finally(function(){button.disabled=false;});
-    });
-  });
-  bar.classList.add('show');
 }
 // fecha IIFE do FARM EM CICLO já fechado acima — mantém escopo limpo
 /* ---------- FARM OP tabs ---------- */
@@ -1927,7 +1877,7 @@ def main() -> None:
 <script>
 __JS__
 </script>
-<script src="src/tbh_site.js"></script>
+<script src="/src/tbh_site.js"></script>
 <script>
 (function(){
   var VB_URL = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin + '/api/visitas' : 'http://localhost:8765/api/visitas';
@@ -1988,20 +1938,14 @@ __JS__
         # valida JSON
         json.loads(map_pos_json)
     except Exception: map_pos_json="{}"
-    # Farm UI helpers live in an ignored local asset. Only the HTTP response
-    # injects the short-lived API token, so no token is written into this HTML.
+    # Farm-watch state stays in its local JSON file and is fetched from the API;
+    # the short-lived server token is injected only in the HTTP response.
     farm_watch_json = "{\"targets\":[],\"hits\":[]}"
-    farm_ui_js = (FARM_UI_JS
-                  .replace("__FARM_WATCH_JSON__", farm_watch_json)
-                  .replace("__TBH_FARM_API_TOKEN__", "__TBH_FARM_API_TOKEN__"))
-    farm_ui_path = os.path.join(ROOT, "src", "tbh_site.js")
-    with open(farm_ui_path, "w", encoding="utf-8") as farm_ui_file:
-        farm_ui_file.write(farm_ui_js)
     _js2 = (JS.replace("__DATA__", data_json)
             .replace("__DROP_MAP__", drop_json)
             .replace("__MAP_POS__", map_pos_json)
             .replace("__FARM_WATCH_JSON__", farm_watch_json)
-            .replace("__TBH_FARM_API_TOKEN__", "__TBH_FARM_API_TOKEN__"))
+            .replace("__TBH_FARM_API_TOKEN__", "__TBH_FARM_API_TOKEN_VALUE__"))
     doc = (doc
            .replace("__CSS__", CSS)
            .replace("__FARMOP__", farm_html)
