@@ -531,18 +531,23 @@ def _print_watch_summary(targets: list[dict], accounts: list[dict],
     total_quantity = total_alerts = 0
     for target, count in zip(targets, counts):
         account = target.get("conta") or "todas as contas"
+        unit_word = "unidade" if count["qtd"] == 1 else "unidades"
+        found_word = "encontrada" if count["qtd"] == 1 else "encontradas"
+        alert_word = "alerta" if count["alertas"] == 1 else "alertas"
         print(
-            f"[FARM]   {target['name']} @ {account} — {count['qtd']} unidade(s) encontradas "
-            f"em {count['alertas']} alerta(s).",
+            f"[FARM]   {target['name']} @ {account} — {count['qtd']} {unit_word} "
+            f"{found_word} em {count['alertas']} {alert_word}.",
             flush=True,
         )
         total_quantity += count["qtd"]
         total_alerts += count["alertas"]
     if not targets:
         print("[FARM] Sem alvos ativos.", flush=True)
+    total_unit_word = "unidade" if total_quantity == 1 else "unidades"
+    total_alert_word = "alerta" if total_alerts == 1 else "alertas"
     print(
-        f"[FARM] Total nos últimos 100 registos guardados: {total_quantity} unidade(s) "
-        f"em {total_alerts} alerta(s).",
+        f"[FARM] Total nos últimos 100 registos guardados: {total_quantity} {total_unit_word} "
+        f"em {total_alerts} {total_alert_word}.",
         flush=True,
     )
 

@@ -119,14 +119,15 @@ class TestAlertData(unittest.TestCase):
                 {"name": "Shadow Bow", "conta": "Conta 2 (other)", "qtd": 5},
             ]})
             output = io.StringIO()
-            alert._print_watch_summary(
-                [{"name": "Shadow Bow", "conta": "geek1781"}],
-                [{"name": "Conta 1 (geek1781)"}, {"name": "Conta 2 (other)"}],
-                watch,
-            )
+            with redirect_stdout(output):
+                alert._print_watch_summary(
+                    [{"name": "Shadow Bow", "conta": "geek1781"}],
+                    [{"name": "Conta 1 (geek1781)"}, {"name": "Conta 2 (other)"}],
+                    watch,
+                )
         self.assertIn("Alvos a vigiar (1)", output.getvalue())
-        self.assertIn("Shadow Bow @ geek1781 — 3 unidade(s) encontradas em 2 alerta(s)", output.getvalue())
-        self.assertIn("Total nos últimos 100 registos guardados: 3 unidade(s) em 2 alerta(s)", output.getvalue())
+        self.assertIn("Shadow Bow @ geek1781 — 3 unidades encontradas em 2 alertas.", output.getvalue())
+        self.assertIn("Total nos últimos 100 registos guardados: 3 unidades em 2 alertas.", output.getvalue())
 
     def test_conta_explicita_restringe_a_leitura_a_conta_alias(self):
         with tempfile.TemporaryDirectory() as tmp:
