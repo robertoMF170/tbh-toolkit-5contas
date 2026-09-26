@@ -12,7 +12,7 @@ VALID = re.compile(r"^https?://(www\.)?tbhindex\.com/(pt/)?builds/\d+/?$", re.I)
 
 def _titulo_farm(conta: str = "") -> str:
     """Gera um título de consola seguro e identificável para a conta."""
-    nome_conta = re.sub(r"[^\w .-]", "_", (conta or "Todas as contas").strip())[:60]
+    nome_conta = re.sub(r"[^\w ().-]", "_", (conta or "Todas as contas").strip())[:60]
     return "TBH FARM - " + (nome_conta or "Todas as contas")
 
 
@@ -28,10 +28,10 @@ def _abrir_run_farm(conta: str = "") -> bool:
     env["TBH_FARM_TITULO"] = titulo
     try:
         subprocess.Popen(
-            ["cmd.exe", "/c", "start", titulo, "/D", ROOT, "cmd.exe", "/K", "call", bat],
+            ["cmd.exe", "/K", f"title {titulo} & call {os.path.basename(bat)}"],
             cwd=ROOT,
             env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
         )
         return True
     except OSError as exc:

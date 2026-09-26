@@ -1322,7 +1322,7 @@ window.farmToggle=function(btn){
   } else {
     btn.classList.add('on'); btn.textContent='✅ Farmando'; btn.title='Ja a farmar — clica para parar' + (conta?' @ '+conta:'');
     var msgConta = conta ? ('Conta: '+conta+' — vigia só essa.') : 'A vigiar TODAS — deteta sozinho qual conta droppou.';
-    toast('✅ A farmar: '+name+'\n'+msgConta+' run_farm.bat abriu numa janela com o título da conta.', conta ? ('run_farm.bat — '+conta+' + 🔔') : 'run_farm.bat — todas as contas + 🔔');
+    toast('A abrir run_farm.bat para: '+name+'\n'+msgConta+' O título da janela identifica a conta; deixa-a aberta.', conta ? ('run_farm.bat — '+conta+' + 🔔') : 'run_farm.bat — todas as contas + 🔔');
     // optimistic: marca todos botões com mesmo nome (várias tabs, FARM POSSÍVEL + FARM OP)
     document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.add('on'); b.textContent='✅ Farmando'; });
     if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_watch.py --add "'+name+'"'+(conta?' --conta "'+conta+'"':'')).catch(()=>{});

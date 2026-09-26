@@ -13,6 +13,7 @@ class TestFarmLauncher(unittest.TestCase):
     def test_titulo_identifica_e_sanitiza_a_conta(self):
         self.assertEqual(tbh_protocol._titulo_farm("Conta 1"), "TBH FARM - Conta 1")
         self.assertEqual(tbh_protocol._titulo_farm('Conta "1"'), "TBH FARM - Conta _1_")
+        self.assertEqual(tbh_protocol._titulo_farm("Conta 1 (geek1781)"), "TBH FARM - Conta 1 (geek1781)")
         self.assertEqual(tbh_protocol._titulo_farm(""), "TBH FARM - Todas as contas")
 
     def test_abre_run_farm_com_conta_no_titulo_e_ambiente(self):
@@ -25,9 +26,11 @@ class TestFarmLauncher(unittest.TestCase):
                 self.assertTrue(tbh_protocol._abrir_run_farm("Conta 1"))
 
             args, kwargs = popen.call_args
-            self.assertEqual(args[0][0:4], ["cmd.exe", "/c", "start", "TBH FARM - Conta 1"])
-            self.assertIn(bat, args[0])
+            self.assertEqual(args[0][0:2], ["cmd.exe", "/K"])
+            self.assertIn("title TBH FARM - Conta 1", args[0][2])
+            self.assertIn(os.path.basename(bat), args[0][2])
             self.assertEqual(kwargs["cwd"], root)
+            self.assertEqual(kwargs["creationflags"], getattr(tbh_protocol.subprocess, "CREATE_NEW_CONSOLE", 0))
             self.assertEqual(kwargs["env"]["TBH_FARM_CONTA"], "Conta 1")
             self.assertEqual(kwargs["env"]["TBH_FARM_TITULO"], "TBH FARM - Conta 1")
 
@@ -64,10 +67,6 @@ class TestFarmLauncher(unittest.TestCase):
             tbh_protocol._handle_farm("tbh://farm?add=Shadow%20Bow&conta=Conta%201")
 
         abrir.assert_not_called()
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 if __name__ == "__main__":
