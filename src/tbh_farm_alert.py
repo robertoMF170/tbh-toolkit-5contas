@@ -5,11 +5,14 @@ O processo e arrancado por run.bat e corre enquanto essa janela estiver aberta.
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
 import time
 from datetime import datetime
+
+import tbh_discord
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BASE)
@@ -668,6 +671,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--watch", action="store_true", help="vigia continuamente, consultando a cada 2 segundos")
     parser.add_argument("--status", action="store_true", help="mostra se o vigia de alertas está ativo")
     parser.add_argument("--check-running", action="store_true", help="verifica o bloqueio do processo sem iniciar outra vigia")
+    parser.add_argument("--discord-setup", action="store_true", help="guarda o webhook e o ID opcional do utilizador num .env local")
+    parser.add_argument("--test-discord", action="store_true", help="envia uma mensagem de teste para o webhook configurado")
     parser.add_argument("--interval", type=float, default=2.0, help="intervalo entre verificacoes (segundos)")
     parser.add_argument("--add", metavar="ITEM", help="adiciona um item aos alertas")
     parser.add_argument("--conta", default="", help="associa o alvo ou verifica esta conta (com --status/--add/--rm)")
@@ -679,6 +684,23 @@ def main(argv: list[str] | None = None) -> int:
         running = _watch_process_running()
         print("VIGIA JA EM EXECUCAO." if running else "VIGIA NAO ESTA EM EXECUCAO.", flush=True)
         return 0 if running else 1
+    if args.discord_setup:
+        webhook_url = getpass.getpass("Webhook Discord novo (entrada oculta; nao reutilizes o que foi exposto): ").strip()
+        mention_id = input("ID numerico do utilizador robs (Enter para nao mencionar): ").strip()
+        try:
+            tbh_discord.save_discord_settings(webhook_url, mention_id)
+        except (OSError, ValueError) as exc:
+            print(f"Configuracao Discord nao guardada: {exc}", flush=True)
+            return 1
+        print("Configuracao Discord guardada em .env sem mostrar o webhook.", flush=True)
+        print("Confirma o envio com: python -X utf8 src\\tbh_farm_alert.py --test-discord", flush=True)
+        return 0
+    if args.test_discord:
+        ok = tbh_discord.send_alert(
+            {"name": "Teste do alerta de farm", "conta": "teste manual", "qtd": 1},
+            test=True,
+        )
+        return 0 if ok else 1
     if args.add:
         changed = add_target(args.add, args.conta)
         print(("Alerta adicionado: " if changed else "Alerta ja registado: ") + args.add, flush=True)
@@ -691,6 +713,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{acknowledge_hits(args.ack, args.all or not args.ack)} alerta(s) confirmado(s).", flush=True)
         return 0
     if args.status:
+        webhook_url, mention_id = tbh_discord.discord_settings()
+        if not webhook_url:
+            print(f"Discord: nao configurado ({tbh_discord.WEBHOOK_ENV} em .env).")
+        elif not tbh_discord.valid_webhook_url(webhook_url):
+            print("Discord: URL configurado, mas formato invalido.")
+        else:
+            print("Discord: webhook configurado; " + ("mencao autorizada configurada." if mention_id and tbh_discord.valid_discord_user_id(mention_id) else "sem ID valido para mencionar robs."))
         heartbeat = watcher_status(interval=args.interval)
         heartbeat["process_running"] = _watch_process_running()
         heartbeat["alive"] = heartbeat["alive"] and heartbeat["process_running"]
