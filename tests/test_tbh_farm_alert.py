@@ -450,5 +450,117 @@ class TestAlertData(unittest.TestCase):
         self.assertEqual(alert.find_new_drops(previous, current, targets), [])
 
 
+class TestFarmZoneValidation(unittest.TestCase):
+    NORMAL_DROP = [[1, 1, 10, 0, "", 0, 0, 0, 0, 0]]
+    TORMENT_DROP = [[1, 1, 90, 3, "", 0, 0, 0, 0, 0]]
+
+    def test_classifica_zona_correta_incorreta_e_sem_dados(self):
+        correct, _, _ = alert._evaluate_zone(
+            {"act": 1, "no": 1, "diff_index": 0, "plague": False},
+            self.NORMAL_DROP,
+        )
+        incorrect, _, _ = alert._evaluate_zone(
+            {"act": 1, "no": 2, "diff_index": 0, "plague": False},
+            self.NORMAL_DROP,
+        )
+        unknown_save, _, _ = alert._evaluate_zone({}, self.NORMAL_DROP)
+        unknown_item, _, _ = alert._evaluate_zone(
+            {"act": 1, "no": 1, "diff_index": 0, "plague": False}, [],
+        )
+        self.assertEqual(correct, "correct")
+        self.assertEqual(incorrect, "incorrect")
+        self.assertEqual(unknown_save, "verify")
+        self.assertEqual(unknown_item, "verify")
+
+    def test_poll_notifica_status_inicial_e_so_repete_ao_mudar_classificacao(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": ""}], "hits": []})
+            write_json(accounts, {"contas": [{
+                "nome": "Conta 1", "save": json.dumps({"Shadow Bow": 0}),
+            }]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            zone = {"key": 1101, "act": 1, "no": 1, "diff": "NORMAL",
+                    "diff_index": 0, "plague": False, "label": "1-1 Normal"}
+            zone_alerts = []
+            inventory = FakeInventory()
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+                mock.patch.object(alert, "_drop_stages_for_name", return_value=self.NORMAL_DROP),
+            ):
+                for _ in range(2):
+                    alert.poll_once(
+                        state, watch, accounts, prices, inventory, lambda _hit: None,
+                        zone_reader=lambda _save: zone,
+                        notify_zone=zone_alerts.append,
+                    )
+                self.assertEqual([item["status"] for item in zone_alerts], ["correct"])
+
+                zone.update({"key": 1102, "no": 2, "label": "1-2 Normal"})
+                alert.poll_once(
+                    state, watch, accounts, prices, inventory, lambda _hit: None,
+                    zone_reader=lambda _save: zone,
+                    notify_zone=zone_alerts.append,
+                )
+                self.assertEqual([item["status"] for item in zone_alerts], ["correct", "incorrect"])
+                self.assertEqual(zone_alerts[-1]["status"], "incorrect")
+
+                # Uma fase diferente com a mesma classificação não repete o alerta.
+                zone.update({"key": 1103, "no": 3, "label": "1-3 Normal"})
+                alert.poll_once(
+                    state, watch, accounts, prices, inventory, lambda _hit: None,
+                    zone_reader=lambda _save: zone,
+                    notify_zone=zone_alerts.append,
+                )
+            self.assertEqual([item["status"] for item in zone_alerts], ["correct", "incorrect"])
+            self.assertIn("zone_statuses", alert._read_json(state, {}))
+
+    def test_aviso_local_de_zona_mostra_classificacao_e_notifica_discord(self):
+        alert_data = {
+            "type": "zone_status", "status": "incorrect", "item": "Shadow Bow",
+            "conta": "Conta 1", "zone": "1-2 Normal", "expected": "1-1 Normal",
+            "reason": "Esta fase não está entre as zonas conhecidas.",
+        }
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert.tbh_discord, "send_alert") as send,
+            redirect_stdout(output),
+        ):
+            alert.notify_zone_status(alert_data)
+        self.assertIn("ZONA INCORRETA — VERIFICA ZONA", output.getvalue())
+        self.assertIn("1-2 Normal", output.getvalue())
+        send.assert_called_once_with(alert_data)
+
+    def test_leitor_de_save_devolve_stage_e_plague_sem_inventar_dificuldade(self):
+        import tbh_inventario as inventory
+
+        normal_save = {"commonSaveData": {"currentStageKey": 1101, "currentStageWave": 4}}
+        plague_save = {"commonSaveData": {"currentStageKey": 201302}}
+        stages = {1101: {"act": 1, "no": 1, "diff": "NORMAL"}}
+        with (
+            mock.patch.object(inventory, "_save_legivel", return_value="save"),
+            mock.patch.object(inventory, "_carregar_stages", return_value=stages),
+            mock.patch.object(inventory, "_es3_decrypt", return_value=normal_save),
+        ):
+            normal = inventory.zona_atual_da_conta("save")
+        with (
+            mock.patch.object(inventory, "_save_legivel", return_value="save"),
+            mock.patch.object(inventory, "_carregar_stages", return_value={}),
+            mock.patch.object(inventory, "_es3_decrypt", return_value=plague_save),
+        ):
+            plague = inventory.zona_atual_da_conta("save")
+
+        self.assertEqual((normal["act"], normal["no"], normal["diff_index"], normal["wave"]), (1, 1, 0, 4))
+        self.assertEqual(plague["label"], "22-2 Plague")
+        self.assertEqual((plague["act"], plague["no"], plague["diff_index"]), (22, 2, None))
+        status, _, _ = alert._evaluate_zone(plague, self.TORMENT_DROP)
+        self.assertEqual(status, "verify")
+
+
 if __name__ == "__main__":
     unittest.main()

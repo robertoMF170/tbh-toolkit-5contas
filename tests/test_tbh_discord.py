@@ -35,6 +35,19 @@ class TestDiscordFarmAlerts(unittest.TestCase):
         self.assertEqual(payload["allowed_mentions"]["parse"], [])
         self.assertEqual(payload["allowed_mentions"]["users"], [self.user_id])
 
+    def test_build_payload_formats_zone_alert_and_limits_mentions(self):
+        payload = discord.build_payload({
+            "type": "zone_status", "status": "incorrect", "item": "Shadow Bow",
+            "conta": "Conta 1", "zone": "1-2 Normal", "expected": "1-1 Normal",
+            "reason": "Verifica a fase atual.",
+        }, f"<@{self.user_id}>")
+        self.assertIn("ZONA INCORRETA", payload["content"])
+        self.assertIn("Shadow Bow", payload["content"])
+        self.assertIn("1-2 Normal", payload["content"])
+        self.assertIn("1-1 Normal", payload["content"])
+        self.assertEqual(payload["allowed_mentions"]["users"], [self.user_id])
+        self.assertEqual(payload["allowed_mentions"]["parse"], [])
+
     def test_build_payload_does_not_ping_handle_or_everyone(self):
         payload = discord.build_payload(
             {"name": "Item", "conta": "geek1781", "qtd": 1},

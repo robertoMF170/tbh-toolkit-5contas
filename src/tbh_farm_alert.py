@@ -312,6 +312,15 @@ _GAME_DATA_OWNER = None
 _LAST_SCAN_ERRORS = {}
 
 
+def _inventory_method(inventory, name: str):
+    """Avoids treating dynamic mock attributes as real reader capabilities."""
+    if getattr(inventory, "__name__", "") == "tbh_inventario":
+        return getattr(inventory, name, None)
+    if callable(getattr(type(inventory), name, None)):
+        return getattr(inventory, name)
+    return None
+
+
 def scan_inventories(accounts: list[dict], market_names: set[str], inventory=None,
                      zone_snapshots: dict | None = None) -> tuple[dict, set[str]]:
     """Devolve inventários, zonas atuais opcionais e contas cuja leitura falhou."""
@@ -340,9 +349,7 @@ def scan_inventories(accounts: list[dict], market_names: set[str], inventory=Non
     for account in accounts:
         name = account["name"]
         try:
-            combined_reader = getattr(type(inventory), "itens_da_conta_com_zona", None)
-            if getattr(inventory, "__name__", "") == "tbh_inventario":
-                combined_reader = getattr(inventory, "itens_da_conta_com_zona", None)
+            combined_reader = _inventory_method(inventory, "itens_da_conta_com_zona")
             if callable(combined_reader):
                 try:
                     items, _deleted, zone = inventory.itens_da_conta_com_zona(
@@ -601,7 +608,8 @@ def _zone_display(zone: dict) -> str:
     try:
         act, no = int(zone.get("act")), int(zone.get("no"))
     except (TypeError, ValueError):
-        return "desconhecida"
+        key = zone.get("key")
+        return f"fase {key}" if key else "desconhecida"
     diff = str(zone.get("diff") or "").upper()
     diff_label = {
         "NORMAL": "Normal", "NIGHTMARE": "Pesadelo", "HELL": "Inferno",
@@ -636,7 +644,13 @@ def _evaluate_zone(zone: dict, drop_stages: list) -> tuple[str, str, list[tuple[
 
     plague = bool(zone.get("plague"))
     if plague and zone.get("diff_index") not in {0, 1, 2, 3}:
-        return "verify", "A dificuldade atual de Plague não está indicada no save.", zones
+        same_place = any(
+            candidate[0] == act and candidate[1] == no and candidate[3]
+            for candidate in zones
+        )
+        if same_place:
+            return "verify", "A dificuldade atual de Plague não está indicada no save.", zones
+        return "incorrect", "Esta fase não está entre as zonas de drop conhecidas do item.", zones
 
     try:
         diff_index = int(zone.get("diff_index"))
@@ -659,14 +673,13 @@ def _zone_status_key(target: dict, account_name: str) -> str:
 
 def _zone_status_signature(status: str, zone: dict, zones: list,
                             reason: str) -> str:
-    # Detecta mudança de fase, sem alertar de novo a cada onda da mesma fase.
-    zone_identity = [
+    # Uma mudança de fase gera aviso; mudanças só na onda não geram spam.
+    phase = [
         zone.get("key"), zone.get("act"), zone.get("no"),
         zone.get("diff_index"), bool(zone.get("plague")),
-        _zone_display(zone),
     ]
     return json.dumps(
-        [status, zone_identity, zones, reason],
+        [status, phase, zones, reason],
         ensure_ascii=True,
         separators=(",", ":"),
         default=str,
@@ -740,10 +753,8 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         accounts, _market_names(targets, price_file), inventory,
         zone_snapshots=zone_snapshots,
     ) if accounts else ({}, set())
-    if not callable(zone_reader) and zone_snapshots and inventory is not None:
-        zone_reader = lambda save_path: {}
-    if zone_reader is None:
-        zone_reader = getattr(inventory, "zona_atual_da_conta", None) if inventory is not None else None
+    if zone_reader is None and inventory is not None:
+        zone_reader = _inventory_method(inventory, "zona_atual_da_conta")
     failed_accounts = {str(name).casefold() for name in failed}
     previous_accounts = {str(name).casefold(): items for name, items in previous.items()}
     for name in failed:
@@ -807,9 +818,26 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     old_zone_statuses = old_state.get("zone_statuses", {}) if isinstance(old_state, dict) else {}
     if not isinstance(old_zone_statuses, dict):
         old_zone_statuses = {}
-    next_zone_statuses = dict(old_zone_statuses) if zone_reader is None and not zone_snapshots else {}
+    active_zone_keys = set()
+    for target in targets:
+        requested_account = str(target.get("conta") or "").strip()
+        if requested_account:
+            resolved_account = resolve_account_name(requested_account, all_accounts)
+            target_accounts = [
+                account for account in accounts
+                if resolved_account and account["name"].casefold() == resolved_account.casefold()
+            ]
+        else:
+            target_accounts = accounts
+        active_zone_keys.update(
+            _zone_status_key(target, account["name"]) for account in target_accounts
+        )
+    next_zone_statuses = {
+        key: value for key, value in old_zone_statuses.items()
+        if key in active_zone_keys
+    }
     zone_notifications = []
-    if callable(zone_reader) or zone_snapshots or accounts:
+    if callable(zone_reader) or zone_snapshots:
         for target in targets:
             requested_account = str(target.get("conta") or "").strip()
             if requested_account:
@@ -825,6 +853,8 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             except Exception:
                 drop_stages = []
             for account in target_accounts:
+                if account["name"].casefold() in failed_accounts and account["name"] not in zone_snapshots:
+                    continue
                 if account["name"] in zone_snapshots:
                     zone = zone_snapshots[account["name"]]
                 elif callable(zone_reader):
@@ -836,8 +866,6 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                     zone = {}
                 if not isinstance(zone, dict):
                     zone = {}
-                if account["name"].casefold() in failed_accounts:
-                    continue
                 status, reason, zones = _evaluate_zone(zone, drop_stages)
                 status_key = _zone_status_key(target, account["name"])
                 signature = _zone_status_signature(status, zone, zones, reason)
