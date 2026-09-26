@@ -831,8 +831,15 @@ def gerar_html(somente_cache: bool = False, so_conta: int = 0) -> str:
 HERO_NOMES = {101: "Knight", 201: "Ranger", 301: "Sorcerer", 401: "Priest", 501: "Hunter", 601: "Slayer"}
 
 
+_STAGE_INFO_CACHE = None
+
+
 def _carregar_stages() -> dict:
     """Mapa stageKey -> info (tbhdata/tbhStages.js descarregado do tbhindex.com)."""
+    global _STAGE_INFO_CACHE
+    if _STAGE_INFO_CACHE is not None:
+        return _STAGE_INFO_CACHE
+
     f = _resolve("data", "tbhdata", "tbhStages.js")
     if not os.path.exists(f):
         for alt in [os.path.join(ROOT, "tbhdata", "tbhStages.js"), os.path.join(BASE, "tbhdata", "tbhStages.js")]:
@@ -845,7 +852,8 @@ def _carregar_stages() -> dict:
         if not m:
             return {}
         d = json.loads(m.group(1))
-        return {s["key"]: s for s in d.get("stages", [])}
+        _STAGE_INFO_CACHE = {s["key"]: s for s in d.get("stages", [])}
+        return _STAGE_INFO_CACHE
     except Exception:
         return {}
 
@@ -854,24 +862,63 @@ _DIF_LABEL = {"NORMAL": "Normal", "NIGHTMARE": "Nightmare", "TORMENT": "Torment"
 
 
 def _stage_txt(key, stages: dict, wave=None) -> str:
-    """stageKey (+onda opcional) -> '22-2 Torment' ou ''. Chave plague = 2YYAPP -> A-PP."""
+    """stageKey (+onda opcional) -> zona legível; chaves plague usam A-PP após o ato 21."""
     try:
         k = int(key or 0)
     except Exception:
         return ""
     if k <= 0:
         return ""
-    s = stages.get(k)
+    s = stages.get(k) or stages.get(str(k))
     if s:
         txt = str(s.get("act", "?")) + "-" + str(s.get("no", "?"))
         dif = _DIF_LABEL.get(s.get("diff"), s.get("diff", ""))
         return txt + " " + dif if dif else txt
     # plague: 201302 -> act 22, plague 02 (fora do mapa estatico)
     if 200000 < k < 300000:
-        act = (k // 1000) % 100
+        act = 21 + (k // 1000) % 100
         pp = k % 100
         return str(act) + "-" + str(pp) + " Plague"
     return ""
+
+
+def zona_atual_da_conta(save_path: str) -> dict:
+    """Lê a zona atual do save; devolve campos estruturados ou {} se indisponível."""
+    try:
+        p = _es3_decrypt(_save_legivel(save_path))
+        common = p.get("commonSaveData") or {}
+        key = int(common.get("currentStageKey") or 0)
+    except Exception:
+        return {}
+    if key <= 0:
+        return {}
+
+    stages = _carregar_stages()
+    stage = stages.get(key) or stages.get(str(key))
+    wave = common.get("currentStageWave")
+    result = {"key": key, "wave": wave, "label": _stage_txt(key, stages)}
+    if isinstance(stage, dict):
+        try:
+            act = int(stage.get("act"))
+            no = int(stage.get("no"))
+        except (TypeError, ValueError):
+            return result
+        diff = str(stage.get("diff") or "").upper()
+    elif 200000 < key < 300000:
+        act = 21 + (key // 1000) % 100
+        no = key % 100
+        diff = "PLAGUE"
+    else:
+        return result
+    diff_index = {"NORMAL": 0, "NIGHTMARE": 1, "HELL": 2, "TORMENT": 3}.get(diff)
+    result.update({
+        "act": act,
+        "no": no,
+        "diff": diff,
+        "diff_index": diff_index,
+        "plague": act >= 21 or diff == "PLAGUE",
+    })
+    return result
 
 
 def _stage_dif(key, stages: dict) -> str:
@@ -879,7 +926,7 @@ def _stage_dif(key, stages: dict) -> str:
         k = int(key or 0)
     except Exception:
         return ""
-    s = stages.get(k)
+    s = stages.get(k) or stages.get(str(k))
     if s:
         return _DIF_LABEL.get(s.get("diff"), s.get("diff", "")) or ""
     if 200000 < k < 300000:

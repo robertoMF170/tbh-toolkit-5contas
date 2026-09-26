@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import sys
@@ -552,6 +553,135 @@ def _print_watch_summary(targets: list[dict], accounts: list[dict],
     )
 
 
+def _drop_stages_for_name(name: str) -> list:
+    """Devolve zonas conhecidas para o item usando o mesmo mapa da dashboard."""
+    try:
+        import tbh_farm
+        stages = tbh_farm.drop_stages_for_name(name)
+        return stages if isinstance(stages, list) else []
+    except (Exception, SystemExit):
+        return []
+
+
+def _canonical_drop_zones(stages: list) -> list[tuple[int, int, int, bool]]:
+    zones = set()
+    for stage in stages or []:
+        if not isinstance(stage, (list, tuple)) or len(stage) < 4:
+            continue
+        try:
+            act, no, diff_index = int(stage[0]), int(stage[1]), int(stage[3])
+            plague = bool(int(stage[9])) if len(stage) > 9 else act >= 21
+        except (TypeError, ValueError):
+            continue
+        if diff_index in {0, 1, 2, 3}:
+            zones.add((act, no, diff_index, plague))
+    return sorted(zones)
+
+
+def _zone_display(zone: dict) -> str:
+    label = str(zone.get("label") or "").strip()
+    if label:
+        return label
+    try:
+        act, no = int(zone.get("act")), int(zone.get("no"))
+    except (TypeError, ValueError):
+        return "desconhecida"
+    diff = str(zone.get("diff") or "").upper()
+    diff_label = {
+        "NORMAL": "Normal", "NIGHTMARE": "Pesadelo", "HELL": "Inferno",
+        "TORMENT": "Tormento", "PLAGUE": "Plague",
+    }.get(diff, "")
+    return f"{act}-{no} {diff_label}".strip()
+
+
+def _expected_zone_labels(zones: list[tuple[int, int, int, bool]], limit: int = 5) -> str:
+    diff_labels = {0: "Normal", 1: "Pesadelo", 2: "Inferno", 3: "Tormento"}
+    labels = []
+    for act, no, diff_index, plague in zones:
+        label = f"{act}-{no} {diff_labels[diff_index]}"
+        if plague:
+            label += " (Plague)"
+        labels.append(label)
+    if len(labels) > limit:
+        labels = labels[:limit] + [f"+{len(zones) - limit} outras"]
+    return ", ".join(labels)
+
+
+def _evaluate_zone(zone: dict, drop_stages: list) -> tuple[str, str, list[tuple[int, int, int, bool]]]:
+    zones = _canonical_drop_zones(drop_stages)
+    if not zone:
+        return "verify", "Não consegui ler a zona atual do save.", zones
+    if not zones:
+        return "verify", "Não há zonas de drop conhecidas para este item.", zones
+    try:
+        act, no = int(zone.get("act")), int(zone.get("no"))
+    except (TypeError, ValueError):
+        return "verify", "O save não contém uma zona que eu consiga comparar.", zones
+
+    plague = bool(zone.get("plague"))
+    same_place = [candidate for candidate in zones if candidate[0] == act and candidate[1] == no and candidate[3] == plague]
+    if plague and zone.get("diff_index") not in {0, 1, 2, 3}:
+        if same_place:
+            return "verify", "A dificuldade atual de Plague não está indicada no save.", zones
+        return "incorrect", "Esta fase não está entre as zonas de drop conhecidas do item.", zones
+
+    try:
+        diff_index = int(zone.get("diff_index"))
+    except (TypeError, ValueError):
+        return "verify", "O save não indica a dificuldade necessária para comparar a zona.", zones
+    if diff_index not in {0, 1, 2, 3}:
+        return "verify", "O save não indica a dificuldade necessária para comparar a zona.", zones
+    if (act, no, diff_index, plague) in zones:
+        return "correct", "A zona do save corresponde a uma fase conhecida de drop deste item.", zones
+    return "incorrect", "Esta fase não está entre as zonas de drop conhecidas do item.", zones
+
+
+def _zone_status_key(target: dict, account_name: str) -> str:
+    return json.dumps(
+        [str(target.get("name") or "").casefold(), account_name.casefold()],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
+def _zone_status_signature(status: str, zone: dict, zones: list,
+                            reason: str) -> str:
+    zone_identity = [
+        zone.get("key"), zone.get("act"), zone.get("no"),
+        zone.get("diff_index"), bool(zone.get("plague")),
+        _zone_display(zone),
+    ]
+    payload = json.dumps(
+        [status, zone_identity, zones, reason],
+        ensure_ascii=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def notify_zone_status(alert_data: dict) -> None:
+    labels = {
+        "correct": "ZONA CORRETA",
+        "incorrect": "ZONA INCORRETA",
+        "verify": "VERIFICA ZONA",
+    }
+    label = labels.get(alert_data.get("status"), "VERIFICA ZONA")
+    message = (
+        f"{label}: {alert_data.get('item') or '?'} | Conta: {alert_data.get('conta') or '?'} | "
+        f"Zona no save: {alert_data.get('zone') or 'desconhecida'}"
+    )
+    if alert_data.get("expected"):
+        message += f" | Zonas conhecidas do item: {alert_data['expected']}"
+    if alert_data.get("reason"):
+        message += f" | {alert_data['reason']}"
+    print(f"\n[FARM] {message}", flush=True)
+    try:
+        tbh_discord.send_alert(alert_data)
+    except Exception as exc:
+        print(f"[FARM] Aviso de zona Discord falhou ({type(exc).__name__}); aviso local continua ativo.", flush=True)
+
+
 def notify_drop(hit: dict) -> None:
     message = f"ITEM ENCONTRADO: {hit['name']}\nConta: {hit['conta']}\nQuantidade nova: {hit['qtd']}"
     print(f"\n\a[FARM] {message.replace(chr(10), ' | ')}", flush=True)
@@ -564,7 +694,8 @@ def notify_drop(hit: dict) -> None:
 
 def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
               accounts_file: str = ACCOUNTS_FILE, price_file: str = PRICE_FILE,
-              inventory=None, notify=notify_drop) -> list[dict]:
+              inventory=None, notify=notify_drop, zone_reader=None,
+              notify_zone=notify_zone_status) -> list[dict]:
     targets = load_targets(watch_file)
     all_accounts = load_accounts(accounts_file)
     if not all_accounts:
@@ -587,6 +718,15 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         old_baselines = {}
 
     current, failed = scan_inventories(accounts, _market_names(targets, price_file), inventory) if accounts else ({}, set())
+    if zone_reader is None:
+        if inventory is None:
+            try:
+                import tbh_inventario as save_reader
+                zone_reader = getattr(save_reader, "zona_atual_da_conta", None)
+            except (Exception, SystemExit):
+                zone_reader = None
+        else:
+            zone_reader = getattr(inventory, "zona_atual_da_conta", None)
     failed_accounts = {str(name).casefold() for name in failed}
     previous_accounts = {str(name).casefold(): items for name, items in previous.items()}
     for name in failed:
@@ -647,12 +787,59 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             next_counts[account_key] = count
         next_baselines[key] = {"accounts": next_counts}
 
+    old_zone_statuses = old_state.get("zone_statuses", {}) if isinstance(old_state, dict) else {}
+    if not isinstance(old_zone_statuses, dict):
+        old_zone_statuses = {}
+    next_zone_statuses = {}
+    zone_notifications = []
+    if callable(zone_reader):
+        for target in targets:
+            requested_account = str(target.get("conta") or "").strip()
+            if requested_account:
+                resolved_account = resolve_account_name(requested_account, all_accounts)
+                target_accounts = [
+                    account for account in accounts
+                    if resolved_account and account["name"].casefold() == resolved_account.casefold()
+                ]
+            else:
+                target_accounts = accounts
+            try:
+                drop_stages = _drop_stages_for_name(target["name"])
+            except Exception:
+                drop_stages = []
+            for account in target_accounts:
+                try:
+                    zone = zone_reader(account["save"]) or {}
+                except Exception:
+                    zone = {}
+                if not isinstance(zone, dict):
+                    zone = {}
+                status, reason, zones = _evaluate_zone(zone, drop_stages)
+                status_key = _zone_status_key(target, account["name"])
+                signature = _zone_status_signature(status, zone, zones, reason)
+                next_zone_statuses[status_key] = signature
+                if old_zone_statuses.get(status_key) == signature:
+                    continue
+                zone_notifications.append({
+                    "type": "zone_status",
+                    "status": status,
+                    "item": target["name"],
+                    "name": target["name"],
+                    "conta": account["name"],
+                    "zone": _zone_display(zone),
+                    "expected": _expected_zone_labels(zones),
+                    "reason": reason,
+                })
+
     _write_json_atomic(state_file, {
         "version": 1,
         "accounts": {**previous, **current},
         "target_baselines": next_baselines,
+        "zone_statuses": next_zone_statuses,
     })
 
+    for zone_alert in zone_notifications:
+        notify_zone(zone_alert)
     for hit in hits:
         _record_hit(hit, watch_file)
         notify(hit)

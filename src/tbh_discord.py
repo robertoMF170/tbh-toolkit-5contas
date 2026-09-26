@@ -187,13 +187,31 @@ def build_payload(hit: dict, mention_id: str = "", test: bool = False) -> dict:
     if not valid_discord_user_id(user_id):
         user_id = ""
     mention = f"<@{user_id}> " if user_id else ""
-    heading = "🧪 TESTE DO ALERTA DE FARM" if test else "🎉 ITEM ENCONTRADO!"
-    content = (
+    if hit.get("type") == "zone_status":
+        zone_status = str(hit.get("status") or "verify")
+        headings = {
+            "correct": "✅ ZONA CORRETA",
+            "incorrect": "🚨 ZONA INCORRETA — VERIFICA ZONA",
+            "verify": "⚠️ VERIFICA ZONA",
+        }
+        content = (
+            f"{mention}{headings.get(zone_status, headings['verify'])}\n"
+            f"**Item:** {str(hit.get('item') or hit.get('name') or '?')}\n"
+            f"**Conta:** {str(hit.get('conta') or '?')}\n"
+            f"**Zona no save:** {str(hit.get('zone') or 'desconhecida')}"
+        )
+        if hit.get("expected"):
+            content += f"\n**Zonas conhecidas do item:** {str(hit['expected'])}"
+        if hit.get("reason"):
+            content += f"\n{str(hit['reason'])}"
+    else:
+        heading = "🧪 TESTE DO ALERTA DE FARM" if test else "🎉 ITEM ENCONTRADO!"
+        content = (
         f"{mention}{heading}\n"
         f"**Item:** {str(hit.get('name') or '?')}\n"
         f"**Conta:** {str(hit.get('conta') or '?')}\n"
-        f"**Quantidade nova:** {hit.get('qtd', 1)}"
-    )
+            f"**Quantidade nova:** {hit.get('qtd', 1)}"
+        )
     return {
         "content": content[:2000],
         "allowed_mentions": {
