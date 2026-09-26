@@ -114,7 +114,7 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
     selected_account = resolve_account_name(conta, accounts) if conta else None
     if conta and not selected_account:
         configured = ", ".join(account["name"] for account in accounts) or "nenhuma conta configurada"
-        print(f"[FARM] AVISO: '{conta}' nao corresponde a uma conta unica. Vou vigiar todas as contas. Configuradas: {configured}.", flush=True)
+        print(f"[FARM] AVISO: '{conta}' nao corresponde a uma conta unica. O alvo fica associado a esse nome e nao alertara ate a conta ser resolvida. Configuradas: {configured}.", flush=True)
     if selected_account:
         accounts = [account for account in accounts if account["name"] == selected_account]
 
@@ -124,17 +124,21 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
     current, failed = {}, set()
     try:
         current, failed = scan_inventories(accounts, _market_names([{"name": name}], price_file), inventory)
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         failed = {account["name"] for account in accounts}
         print(f"[FARM] Snapshot inicial indisponivel ({type(exc).__name__}: {exc}); alvo registado e o vigia vai tentar novamente.", flush=True)
+    readable_current = dict(current)
     folded_old = {str(account).casefold(): items for account, items in old_accounts.items()}
     for account in failed:
         if account.casefold() in folded_old:
             current[account] = folded_old[account.casefold()]
+    # Keep an explicit empty baseline for unreadable accounts. Otherwise poll_once
+    # could mistake an older global snapshot for the moment this target was added.
     old_baselines[_target_key({"name": name, "conta": conta})] = {
-        "accounts": {account.casefold(): _item_count(items, name) for account, items in current.items()}
+        "accounts": {account.casefold(): _item_count(items, name) for account, items in readable_current.items()}
     }
     state.update({"version": 1, "accounts": {**old_accounts, **current}, "target_baselines": old_baselines})
+
     _write_json_atomic(state_file, state)
 
     # Persist the watch request even if reading saves failed; the running monitor
@@ -241,11 +245,13 @@ def scan_inventories(accounts: list[dict], market_names: set[str], inventory=Non
     if not accounts:
         return {}, set()
 
+    snapshots = {}
+    failed = set()
     if _GAME_DATA_OWNER is not inventory or _GAME_DATA_CACHE is None:
         try:
             _GAME_DATA_CACHE = inventory.carregar_dados_jogo()
             _GAME_DATA_OWNER = inventory
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             error = f"{type(exc).__name__}: {exc}"
             for account in accounts:
                 name = account["name"]
@@ -253,9 +259,7 @@ def scan_inventories(accounts: list[dict], market_names: set[str], inventory=Non
                 if _LAST_SCAN_ERRORS.get(name) != error:
                     print(f"[FARM] Dados do inventario indisponiveis ({error}); a tentar novamente.", flush=True)
                     _LAST_SCAN_ERRORS[name] = error
-            return {}, failed
-    snapshots = {}
-    failed = set()
+            return snapshots, failed
     for account in accounts:
         name = account["name"]
         try:
@@ -544,9 +548,9 @@ def watch(interval: float = 2.0) -> None:
             poll_once()
             accounts = load_accounts()
             unreadable = len(_LAST_SCAN_ERRORS)
-            if not targets:
-                status = "waiting_for_targets"
-            elif not accounts:
+            configured_names = {account["name"].casefold() for account in accounts}
+            unreadable = len(configured_names & {name.casefold() for name in _LAST_SCAN_ERRORS})
+            if not accounts:
                 status = "no_accounts"
             elif unreadable == len(accounts):
                 status = "save_read_error"
@@ -554,6 +558,8 @@ def watch(interval: float = 2.0) -> None:
                 status = "partial_warning"
             elif any(target.get("conta") and not resolve_account_name(target["conta"], accounts) for target in targets):
                 status = "account_not_found"
+            elif not targets:
+                status = "waiting_for_targets"
             else:
                 status = "active"
             _write_heartbeat(targets, accounts, interval, status=status)
@@ -578,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--status", action="store_true", help="mostra se o vigia de alertas está ativo")
     parser.add_argument("--interval", type=float, default=2.0, help="intervalo entre verificacoes (segundos)")
     parser.add_argument("--add", metavar="ITEM", help="adiciona um item aos alertas")
-    parser.add_argument("--conta", default="", help="associa o alvo a uma conta (só com --add/--rm)")
+    parser.add_argument("--conta", default="", help="associa o alvo ou verifica esta conta (com --status/--add/--rm)")
     parser.add_argument("--rm", metavar="ITEM", help="remove um item dos alertas")
     parser.add_argument("--ack", metavar="ITEM", nargs="?", const="", help="confirma alertas pendentes")
     parser.add_argument("--all", action="store_true", help="confirma todos os alertas pendentes")
@@ -596,29 +602,42 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.status:
         heartbeat = watcher_status(interval=args.interval)
-        age = heartbeat["age_seconds"]
-        status_accounts = [{"name": name} for name in heartbeat.get("accounts", [])] if isinstance(heartbeat, dict) else []
+        account_rows = heartbeat.get("accounts", [])
+        status_accounts = [
+            {"name": str(name).strip()}
+            for name in account_rows
+            if isinstance(name, str) and name.strip()
+        ] if isinstance(account_rows, list) else []
         requested_account = resolve_account_name(args.conta, status_accounts) if args.conta else None
-        targets = heartbeat.get("targets", []) if isinstance(heartbeat, dict) else []
+        target_rows = heartbeat.get("targets", [])
+        targets = [target for target in target_rows if isinstance(target, dict)] if isinstance(target_rows, list) else []
         watches_requested_account = not args.conta or any(
             not str(target.get("conta") or "").strip()
             or resolve_account_name(target.get("conta"), status_accounts) == requested_account
             for target in targets
         )
         if heartbeat["alive"] and (not args.conta or requested_account) and watches_requested_account:
-            print(f"VIGIA ATIVO — {heartbeat.get('target_count', 0)} alvo(s), {heartbeat.get('account_count', 0)} conta(s), estado: {heartbeat.get('status', '?')}.")
+            status = str(heartbeat.get("status") or "?")
+            print(f"VIGIA ATIVO — {heartbeat.get('target_count', len(targets))} alvo(s), {heartbeat.get('account_count', len(status_accounts))} conta(s), estado: {status}.")
             if args.conta:
                 print(f"Conta pedida: {args.conta} -> {requested_account}.")
             print(f"Ultima verificacao: {heartbeat.get('updated_at', '?')}; intervalo: {heartbeat.get('interval_seconds', '?')}s.")
-            if heartbeat.get("status") == "no_accounts":
-                print("AVISO: o vigia esta vivo, mas nao carregou contas. Confirma config/baus.json.")
-            if heartbeat.get("status") == "account_not_found":
-                print("ERRO: conta selecionada nao encontrada no ficheiro de contas.")
-            if heartbeat.get("unreadable_accounts"):
-                print("Saves com erro de leitura: " + ", ".join(heartbeat["unreadable_accounts"]))
+            if status == "no_accounts":
+                print("ERRO: o vigia esta vivo, mas nao carregou contas. Confirma config/baus.json.")
+            if status == "account_not_found":
+                print("ERRO: a conta associada a um alvo nao foi encontrada no ficheiro de contas.")
+            unreadable = heartbeat.get("unreadable_accounts", [])
+            if isinstance(unreadable, list) and unreadable:
+                print("Saves com erro de leitura: " + ", ".join(str(name) for name in unreadable))
+            if heartbeat.get("error"):
+                print("Ultimo erro do vigia: " + str(heartbeat["error"]))
+            if status in {"no_accounts", "save_read_error", "partial_warning", "account_not_found", "error"} or heartbeat.get("error") or unreadable:
+                print("AVISO: processo ativo, mas ha erros que podem impedir alguns alertas; corrige os detalhes acima.")
+                return 2
             return 0
         if heartbeat["alive"] and args.conta and not requested_account:
-            print(f"VIGIA ATIVO, mas a conta '{args.conta}' nao esta na lista configurada: {', '.join(a['name'] for a in status_accounts) or 'nenhuma'}.")
+            names = ", ".join(account["name"] for account in status_accounts) or "nenhuma"
+            print(f"VIGIA ATIVO, mas a conta '{args.conta}' nao esta na lista configurada: {names}.")
             return 2
         if heartbeat["alive"] and args.conta and not watches_requested_account:
             print(f"VIGIA ATIVO, mas nao tem alvo associado a '{requested_account}'.")

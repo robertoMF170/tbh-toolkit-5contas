@@ -1302,6 +1302,7 @@ window.farmSort=function(btn){
   siblings.forEach(function(x){ x.classList.toggle('on', x===btn); });
 };
 window.farmToggle=function(btn){
+  if(btn.dataset.busy==='1') return;
   var name=btn.getAttribute('data-farm')||'';
   if(!name) return;
   var conta=btn.getAttribute('data-conta')||'';
@@ -1310,6 +1311,8 @@ window.farmToggle=function(btn){
   var on = btn.classList.contains('on');
   var action = on ? 'rm' : 'add';
   var url = 'tbh://farm?'+action+'='+encodeURIComponent(name) + (conta ? '&conta='+encodeURIComponent(conta) : '');
+  btn.dataset.busy='1';
+  setTimeout(function(){ btn.dataset.busy=''; }, 2500);
   var cmd = 'python src\\tbh_farm_alert.py --'+action+' '+JSON.stringify(name) + (conta ? ' --conta '+JSON.stringify(conta) : '');
   // O protocolo só regista/remove o alvo; o vigia contínuo corre no run.bat principal.
   try{ location.href=url; }catch(e){}
@@ -1320,11 +1323,11 @@ window.farmToggle=function(btn){
     // limpa optimistic across builds se tirar
     document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.remove('on'); b.textContent='🎯 Farmar'; });
   } else {
-    btn.classList.add('on'); btn.textContent='✅ Farmando'; btn.title='Ja a farmar — clica para parar' + (conta?' @ '+conta:'');
+    btn.classList.add('on'); btn.textContent='✅ Alerta pedido'; btn.title='Alerta pedido ao Python — confirma ABRIR e mantém run.bat aberto' + (conta?' @ '+conta:'');
     var msgConta = conta ? ('Conta: '+conta+' — vigia só essa.') : 'A vigiar TODAS — deteta sozinho qual conta droppou.';
-    toast('A registar alerta: '+name+'\n'+msgConta+' O run.bat verifica os saves a cada 2s; deixa-o aberto.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
+    toast('A registar alerta: '+name+'\n'+msgConta+' O Python pode pedir autorização para abrir tbh://; confirma ABRIR. O run.bat deve estar aberto para vigiar.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
     // optimistic: marca todos botões com mesmo nome (várias tabs, FARM POSSÍVEL + FARM OP)
-    document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.add('on'); b.textContent='✅ Farmando'; });
+    document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.add('on'); b.textContent='✅ Alerta pedido'; });
     if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_alert.py --add '+JSON.stringify(name)+(conta?' --conta '+JSON.stringify(conta):'')).catch(()=>{});
   }
   if(on) copyText(cmd).catch(()=>{});

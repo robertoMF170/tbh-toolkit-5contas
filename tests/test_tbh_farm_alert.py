@@ -28,6 +28,25 @@ def write_json(path, value):
 
 
 class TestAlertData(unittest.TestCase):
+    def test_resolve_conta_por_nome_e_alias_steam(self):
+        accounts = [
+            {"name": "Conta 1 (geek1781)"},
+            {"name": "Conta 2 (opiratanumero1)"},
+        ]
+        self.assertEqual(alert.resolve_account_name("Conta 1 (geek1781)", accounts), "Conta 1 (geek1781)")
+        self.assertEqual(alert.resolve_account_name("geek1781", accounts), "Conta 1 (geek1781)")
+        self.assertIsNone(alert.resolve_account_name("nao-existe", accounts))
+
+    def test_estado_status_do_heartbeat_ativo_ou_expirado(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            heartbeat = os.path.join(tmp, "heartbeat.json")
+            write_json(heartbeat, {"updated_epoch": 100.0, "status": "active"})
+            ativo = alert.watcher_status(heartbeat, now=103, interval=2)
+            expirado = alert.watcher_status(heartbeat, now=120, interval=2)
+        self.assertTrue(ativo["alive"])
+        self.assertEqual(ativo["status"], "active")
+        self.assertFalse(expirado["alive"])
+
     def test_adiciona_remove_e_confirma_alvos_e_hits(self):
         with tempfile.TemporaryDirectory() as tmp:
             watch = os.path.join(tmp, "farm_watch.json")
@@ -48,18 +67,18 @@ class TestAlertData(unittest.TestCase):
             state = os.path.join(tmp, "state.json")
             prices = os.path.join(tmp, "prices.json")
             write_json(watch, {"targets": [], "hits": []})
-            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 4})}]})
+            write_json(accounts, {"contas": [{"nome": "Conta 1 (geek1781)", "save": json.dumps({"Shadow Bow": 4})}]})
             write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
             with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
-                # O alvo herda a contagem que já existe quando o utilizador clica Farmar.
-                self.assertTrue(alert.add_target("Shadow Bow", "Conta 1", watch, state_file=state, accounts_file=accounts, price_file=prices, inventory=FakeInventory()))
+                self.assertTrue(alert.add_target("Shadow Bow", "geek1781", watch, state_file=state, accounts_file=accounts, price_file=prices, inventory=FakeInventory()))
                 notified = []
                 self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append), [])
                 self.assertEqual(notified, [])
-                self.assertEqual(alert._read_json(state, {})["target_baselines"][alert._target_key({"name": "Shadow Bow", "conta": "Conta 1"})]["accounts"]["conta 1"], 4)
-                write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 5})}]})
+                key = alert._target_key({"name": "Shadow Bow", "conta": "geek1781"})
+                self.assertEqual(alert._read_json(state, {})["target_baselines"][key]["accounts"]["conta 1 (geek1781)"], 4)
+                write_json(accounts, {"contas": [{"nome": "Conta 1 (geek1781)", "save": json.dumps({"Shadow Bow": 5})}]})
                 hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append)
-            self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}])
+            self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1 (geek1781)", "qtd": 1}])
             self.assertEqual(notified, hits)
 
     def test_linha_de_base_nao_avisa_por_item_que_ja_tinha(self):

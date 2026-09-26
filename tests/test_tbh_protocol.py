@@ -13,9 +13,9 @@ class TestFarmProtocol(unittest.TestCase):
     def test_adicionar_so_regista_alerta_com_conta(self):
         with mock.patch.object(tbh_farm_alert, "add_target", return_value=True) as add, \
              mock.patch.object(tbh_protocol.subprocess, "Popen") as popen:
-            tbh_protocol._handle_farm("tbh://farm?add=Shadow%20Bow&conta=Conta%201")
+            tbh_protocol._handle_farm("tbh://farm?add=Shadow%20Bow&conta=geek1781")
 
-        add.assert_called_once_with("Shadow Bow", "Conta 1")
+        add.assert_called_once_with("Shadow Bow", "geek1781")
         popen.assert_not_called()
 
     def test_adicionar_sem_conta_regista_para_todas(self):
@@ -33,15 +33,15 @@ class TestFarmProtocol(unittest.TestCase):
 
     def test_remover_alvo_com_conta(self):
         with mock.patch.object(tbh_farm_alert, "remove_target", return_value=True) as remove:
-            tbh_protocol._handle_farm("tbh://farm?rm=Shadow%20Bow&conta=Conta%201")
+            tbh_protocol._handle_farm("tbh://farm?rm=Shadow%20Bow&conta=geek1781")
 
-        remove.assert_called_once_with("Shadow Bow", "Conta 1")
+        remove.assert_called_once_with("Shadow Bow", "geek1781")
 
-    def test_ack_confirma_todos_alertas_pendentes(self):
+    def test_ack_confirma_alertas_da_conta(self):
         with mock.patch.object(tbh_farm_alert, "acknowledge_hits", return_value=2) as ack:
-            tbh_protocol._handle_farm("tbh://farm?ack=Shadow%20Bow")
+            tbh_protocol._handle_farm("tbh://farm?ack=Shadow%20Bow&conta=geek1781")
 
-        ack.assert_called_once_with("Shadow Bow", all_hits=False, conta="")
+        ack.assert_called_once_with("Shadow Bow", all_hits=False, conta="geek1781")
 
     def test_nao_instala_alertas_se_item_vazio(self):
         with mock.patch.object(tbh_farm_alert, "add_target") as add:

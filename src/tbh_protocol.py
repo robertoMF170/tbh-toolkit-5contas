@@ -26,7 +26,7 @@ def _handle_farm(raw: str):
         def adicionar(nome, conta_farm=""):
             if farm_alert.add_target(nome, conta_farm):
                 destino = f" @ {conta_farm}" if conta_farm else " @ todas as contas"
-                print(f"OK — alerta registado: {nome}{destino}. O run.bat verifica os saves a cada 2s.")
+                print(f"OK — alerta registado: {nome}{destino}. O vigia no run.bat verifica os saves a cada 2s.")
             else:
                 print(f"Este alvo ja esta registado: {nome}.")
 
@@ -36,7 +36,7 @@ def _handle_farm(raw: str):
         conta = one("conta") or one("account") or ""
         # compat: tbh://farm?add=Nome&conta=Conta 1
         if add:
-            # conta pode vir do botão da build (|user=Conta X) — se não vier, auto-deteta no watch
+            # conta pode ser o nome de login; o vigia resolve-o pelo alias em baus.json
             adicionar(add, conta)
             return True
         if rm:
