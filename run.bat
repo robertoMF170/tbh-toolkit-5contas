@@ -159,11 +159,16 @@ start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2
 echo       A verificar arranque do processo...
 timeout /t 2 /nobreak >nul
 python -X utf8 src\tbh_farm_alert.py --status --interval 2
-if errorlevel 1 (
-  echo [FARM] VIGIA INATIVO. Verifica o Python e os caminhos dos saves em config\baus.json.
-) else (
-  echo [FARM] OK — deixa esta janela aberta; o estado atualiza a cada 2 segundos.
-)
+if errorlevel 2 goto farm_status_warning
+if errorlevel 1 goto farm_status_inactive
+echo [FARM] OK — deixa esta janela aberta; o estado atualiza a cada 2 segundos.
+goto farm_status_done
+:farm_status_warning
+echo [FARM] PROCESSO ATIVO, MAS COM ERROS — le a mensagem acima e confirma os saves/dados da conta.
+goto farm_status_done
+:farm_status_inactive
+echo [FARM] VIGIA INATIVO. Verifica o Python e os caminhos dos saves em config\baus.json.
+:farm_status_done
 echo.
 goto farm_alert_done
 

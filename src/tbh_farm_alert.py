@@ -30,7 +30,9 @@ ACCOUNTS_FILE = _first_existing([
     os.path.join(BASE, "baus.json"),
 ])
 STATE_FILE = os.path.join(ROOT, "var", "farm_alert_state.json")
-HEARTBEAT_FILE = os.path.join(ROOT, "var", "farm_watch.heartbeat")
+# The legacy tbh_farm_watch.py writes a plain-text timestamp to its own
+# farm_watch.heartbeat; keep this JSON health marker separate.
+HEARTBEAT_FILE = os.path.join(ROOT, "var", "farm_alert.heartbeat")
 PRICE_FILE = _first_existing([
     os.path.join(ROOT, "data", "tbhdata", "precos_cache.json"),
     os.path.join(ROOT, "tbhdata", "precos_cache.json"),

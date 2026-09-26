@@ -1,8 +1,10 @@
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from collections import Counter
 from unittest import mock
 
@@ -36,6 +38,44 @@ class TestAlertData(unittest.TestCase):
         self.assertEqual(alert.resolve_account_name("Conta 1 (geek1781)", accounts), "Conta 1 (geek1781)")
         self.assertEqual(alert.resolve_account_name("geek1781", accounts), "Conta 1 (geek1781)")
         self.assertIsNone(alert.resolve_account_name("nao-existe", accounts))
+
+    def test_status_confirma_alvo_na_conta_pelo_alias_steam(self):
+        heartbeat = {
+            "alive": True,
+            "age_seconds": 1,
+            "accounts": ["Conta 1 (geek1781)"],
+            "targets": [{"name": "Shadow Bow", "conta": "geek1781"}],
+            "target_count": 1,
+            "account_count": 1,
+            "status": "active",
+            "updated_at": "agora",
+            "interval_seconds": 2,
+            "unreadable_accounts": [],
+        }
+        output = io.StringIO()
+        with mock.patch.object(alert, "watcher_status", return_value=heartbeat), redirect_stdout(output):
+            result = alert.main(["--status", "--conta", "geek1781"])
+        self.assertEqual(result, 0)
+        self.assertIn("VIGIA ATIVO", output.getvalue())
+        self.assertIn("geek1781 -> Conta 1 (geek1781)", output.getvalue())
+
+    def test_scan_dados_jogo_falhados_devolve_conta_como_nao_legivel(self):
+        class MissingGameData:
+            def carregar_dados_jogo(self):
+                raise SystemExit("ficheiros tbhdata em falta")
+
+        with (
+            mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+            mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+            mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+        ):
+            snapshots, failed = alert.scan_inventories(
+                [{"name": "Conta 1 (geek1781)", "save": "save.es3"}],
+                {"Shadow Bow"},
+                MissingGameData(),
+            )
+        self.assertEqual(snapshots, {})
+        self.assertEqual(failed, {"Conta 1 (geek1781)"})
 
     def test_estado_status_do_heartbeat_ativo_ou_expirado(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -80,6 +120,42 @@ class TestAlertData(unittest.TestCase):
                 hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append)
             self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1 (geek1781)", "qtd": 1}])
             self.assertEqual(notified, hits)
+
+    def test_save_indisponivel_ao_registar_nao_gera_drop_falso_ao_recuperar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1 (geek1781)", "save": "broken"}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            inventory = FakeInventory()
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+            ):
+                self.assertTrue(alert.add_target(
+                    "Shadow Bow", "geek1781", watch,
+                    state_file=state, accounts_file=accounts,
+                    price_file=prices, inventory=inventory,
+                ))
+                key = alert._target_key({"name": "Shadow Bow", "conta": "geek1781"})
+                self.assertEqual(alert._read_json(state, {})["target_baselines"][key]["accounts"], {})
+                # O save fica legivel depois do clique, mas o item já existia.
+                write_json(accounts, {"contas": [{
+                    "nome": "Conta 1 (geek1781)", "save": json.dumps({"Shadow Bow": 4})
+                }]})
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, inventory,
+                    lambda hit: self.fail("nao deve avisar ao definir a primeira linha de base"),
+                ), [])
+                write_json(accounts, {"contas": [{
+                    "nome": "Conta 1 (geek1781)", "save": json.dumps({"Shadow Bow": 5})
+                }]})
+                hits = alert.poll_once(state, watch, accounts, prices, inventory, lambda hit: None)
+        self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1 (geek1781)", "qtd": 1}])
 
     def test_linha_de_base_nao_avisa_por_item_que_ja_tinha(self):
         with tempfile.TemporaryDirectory() as tmp:
