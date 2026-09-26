@@ -679,6 +679,8 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
     print(f"[FARM] Vigia iniciado: consulta saves a cada {interval:g}s. Deixa o run.bat aberto.", flush=True)
     last_signature = None
     last_report = time.monotonic()
+    last_error_signature = None
+    last_error_report = 0.0
     while True:
         started = time.monotonic()
         try:
@@ -723,7 +725,7 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
                     good = max(0, len(watched_accounts) - unreadable)
                     webhook_url, _mention_id = tbh_discord.discord_settings()
                     discord_on = (
-                        os.environ.get("TBH_DISCORD_ENABLED", "").strip() != "0"
+                        tbh_discord.discord_enabled()
                         and tbh_discord.valid_webhook_url(webhook_url)
                     )
                     discord_label = "ativo" if discord_on else "desativado"
@@ -738,16 +740,29 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
                 _LAST_SCAN_ERRORS.clear()
                 status = "waiting_for_targets" if configured_accounts else "no_accounts"
                 _write_heartbeat(targets, configured_accounts, interval, status=status, watched_accounts=watched_accounts)
+                now = time.monotonic()
+                if now - last_report >= report_interval:
+                    print(
+                        "[FARM] Continua ativo, a espera de itens para vigiar na dashboard. "
+                        f"Nao consulta saves sem alvos; proximo sinal em cada ciclo de {report_interval:g}s.",
+                        flush=True,
+                    )
+                    last_report = now
+            last_error_signature = None
         except KeyboardInterrupt:
             print("\n[FARM] Vigia parado.", flush=True)
             return
         except (Exception, SystemExit) as exc:
-            error = type(exc).__name__
+            error = f"{type(exc).__name__}: {exc}"
             fallback_targets = locals().get("targets", [])
             fallback_accounts = locals().get("configured_accounts", [])
             fallback_watched = locals().get("watched_accounts", [])
             _write_heartbeat(fallback_targets, fallback_accounts, interval, status="error", error=error, watched_accounts=fallback_watched)
-            print(f"[FARM] Erro no ciclo de vigia ({error}): {exc}", flush=True)
+            now = time.monotonic()
+            if error != last_error_signature or now - last_error_report >= report_interval:
+                print(f"[FARM] Erro no ciclo de vigia ({error}). Vou tentar novamente.", flush=True)
+                last_error_signature = error
+                last_error_report = now
         time.sleep(max(0.1, interval - (time.monotonic() - started)))
 
 
