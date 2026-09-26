@@ -339,6 +339,11 @@ def _write_heartbeat(targets: list[dict], accounts: list[dict], interval: float,
                      status: str = "running", error: str = "",
                      path: str = HEARTBEAT_FILE) -> None:
     """Persists a small status marker so run.bat can confirm the watcher is alive."""
+    account_names = {str(account.get("name") or "").casefold() for account in accounts}
+    unreadable = sorted(
+        name for name in _LAST_SCAN_ERRORS
+        if name.casefold() in account_names
+    )
     _write_json_atomic(path, {
         "pid": os.getpid(),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -349,7 +354,7 @@ def _write_heartbeat(targets: list[dict], accounts: list[dict], interval: float,
         "targets": [{"name": target["name"], "conta": target.get("conta") or ""} for target in targets],
         "account_count": len(accounts),
         "accounts": [account["name"] for account in accounts],
-        "unreadable_accounts": sorted(_LAST_SCAN_ERRORS),
+        "unreadable_accounts": unreadable,
         "error": error,
     })
 
@@ -449,12 +454,12 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         old_baselines = {}
 
     current, failed = scan_inventories(accounts, _market_names(targets, price_file), inventory)
+    failed_accounts = {str(name).casefold() for name in failed}
     previous_accounts = {str(name).casefold(): items for name, items in previous.items()}
     for name in failed:
         if name.casefold() in previous_accounts:
             current[name] = previous_accounts[name.casefold()]
 
-    accounts_by_fold = {name.casefold(): name for name in current}
     selected_targets = [target for target in targets if target.get("conta")]
     if selected_targets and len(selected_targets) == len(targets):
         allowed_accounts = {
@@ -463,7 +468,13 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         } - {""}
         accounts = [account for account in accounts if account["name"].casefold() in allowed_accounts]
         current = {name: items for name, items in current.items() if name.casefold() in allowed_accounts}
-        accounts_by_fold = {name.casefold(): name for name in current}
+    # A previously cached inventory can keep state stable during a save lock, but
+    # must never be treated as a fresh read or used to seed a new target baseline.
+    readable_current = {
+        name: items for name, items in current.items()
+        if name.casefold() not in failed_accounts
+    }
+    accounts_by_fold = {name.casefold(): name for name in readable_current}
     next_baselines = {}
     hits = []
     hit_keys = set()
@@ -482,20 +493,20 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             }
 
         # New accounts enter the baseline at their first valid read, not as false drops.
-        for account_name, items in current.items():
+        for account_name, items in readable_current.items():
             old_counts.setdefault(account_name.casefold(), _item_count(items, target["name"]))
 
         if target.get("conta"):
-            requested_account = resolve_account_name(target["conta"], accounts)
+            requested_account = resolve_account_name(target["conta"], all_accounts)
             account = accounts_by_fold.get(requested_account.casefold()) if requested_account else None
             account_names = [account] if account else []
         else:
-            account_names = list(current)
+            account_names = list(readable_current)
 
         next_counts = dict(old_counts)
         for account_name in account_names:
             account_key = account_name.casefold()
-            items = current.get(account_name) or {}
+            items = readable_current.get(account_name) or {}
             count = _item_count(items, target["name"])
             if account_key not in old_counts:
                 # This target/account pair was not observed before; start at today's count.
@@ -525,7 +536,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
 
 def watch(interval: float = 2.0) -> None:
     interval = max(0.5, min(interval, 60.0))
-    print(f"[FARM] Vigia iniciado: consulta saves de 2 em 2 segundos. Deixa o run.bat aberto.", flush=True)
+    print(f"[FARM] Vigia iniciado: consulta saves a cada {interval:g}s. Deixa o run.bat aberto.", flush=True)
     last_signature = None
     while True:
         started = time.monotonic()
@@ -546,32 +557,33 @@ def watch(interval: float = 2.0) -> None:
 
             # Sinaliza o arranque antes do primeiro scan, para o .bat confirmar que o
             # processo existe mesmo quando ainda nao ha alvos ou saves acessiveis.
-            _write_heartbeat(targets, accounts, interval, status="starting" if not targets else "scanning")
-            poll_once()
-            accounts = load_accounts()
-            unreadable = len(_LAST_SCAN_ERRORS)
-            configured_names = {account["name"].casefold() for account in accounts}
-            unreadable = len(configured_names & {name.casefold() for name in _LAST_SCAN_ERRORS})
-            if not accounts:
-                status = "no_accounts"
-            elif unreadable == len(accounts):
-                status = "save_read_error"
-            elif unreadable:
-                status = "partial_warning"
-            elif any(target.get("conta") and not resolve_account_name(target["conta"], accounts) for target in targets):
-                status = "account_not_found"
-            elif not targets:
-                status = "waiting_for_targets"
-            else:
-                status = "active"
-            _write_heartbeat(targets, accounts, interval, status=status)
+            _write_heartbeat(targets, accounts, interval, status="scanning" if targets else "starting")
             if targets:
+                poll_once()
+                accounts = load_accounts()
+                configured_names = {account["name"].casefold() for account in accounts}
+                unreadable = len(configured_names & {name.casefold() for name in _LAST_SCAN_ERRORS})
+                if not accounts:
+                    status = "no_accounts"
+                elif unreadable == len(accounts):
+                    status = "save_read_error"
+                elif unreadable:
+                    status = "partial_warning"
+                elif any(target.get("conta") and not resolve_account_name(target["conta"], accounts) for target in targets):
+                    status = "account_not_found"
+                else:
+                    status = "active"
+                _write_heartbeat(targets, accounts, interval, status=status)
                 good = max(0, len(accounts) - unreadable)
                 print(f"[FARM] {datetime.now().strftime('%H:%M:%S')} — {len(targets)} alvo(s); saves legiveis {good}/{len(accounts)}; verifica a cada {interval:g}s.", flush=True)
+            else:
+                _LAST_SCAN_ERRORS.clear()
+                status = "waiting_for_targets" if accounts else "no_accounts"
+                _write_heartbeat(targets, accounts, interval, status=status)
         except KeyboardInterrupt:
             print("\n[FARM] Vigia parado.", flush=True)
             return
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
             error = type(exc).__name__
             fallback_targets = locals().get("targets", [])
             fallback_accounts = locals().get("accounts", [])
@@ -637,6 +649,9 @@ def main(argv: list[str] | None = None) -> int:
                 print("AVISO: processo ativo, mas ha erros que podem impedir alguns alertas; corrige os detalhes acima.")
                 return 2
             return 0
+        if heartbeat["alive"] and heartbeat.get("status") in {"starting", "scanning"}:
+            print("VIGIA A ARRANCAR — primeira leitura dos saves ainda em curso.")
+            return 3
         if heartbeat["alive"] and args.conta and not requested_account:
             names = ", ".join(account["name"] for account in status_accounts) or "nenhuma"
             print(f"VIGIA ATIVO, mas a conta '{args.conta}' nao esta na lista configurada: {names}.")

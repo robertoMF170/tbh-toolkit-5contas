@@ -1323,9 +1323,9 @@ window.farmToggle=function(btn){
     // limpa optimistic across builds se tirar
     document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.remove('on'); b.textContent='🎯 Farmar'; });
   } else {
-    btn.classList.add('on'); btn.textContent='✅ Alerta pedido'; btn.title='Alerta pedido ao Python — confirma ABRIR e mantém run.bat aberto' + (conta?' @ '+conta:'');
+    btn.classList.add('on'); btn.textContent='✅ Alerta pedido'; btn.title='Pedido enviado ao protocolo tbh://; confirma Abrir Python e mantém run.bat aberto' + (conta?' @ '+conta:'');
     var msgConta = conta ? ('Conta: '+conta+' — vigia só essa.') : 'A vigiar TODAS — deteta sozinho qual conta droppou.';
-    toast('A registar alerta: '+name+'\n'+msgConta+' O Python pode pedir autorização para abrir tbh://; confirma ABRIR. O run.bat deve estar aberto para vigiar.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
+    toast('A registar alerta: '+name+'\n'+msgConta+' O aviso "Abrir Python?" do browser e normal: autoriza o protocolo tbh:// a registar o alvo. Para receber alertas, deixa run.bat aberto e confirma [FARM] OK.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
     // optimistic: marca todos botões com mesmo nome (várias tabs, FARM POSSÍVEL + FARM OP)
     document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.add('on'); b.textContent='✅ Alerta pedido'; });
     if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_alert.py --add '+JSON.stringify(name)+(conta?' --conta '+JSON.stringify(conta):'')).catch(()=>{});
