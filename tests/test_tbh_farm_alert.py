@@ -305,12 +305,18 @@ class TestAlertData(unittest.TestCase):
             with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
                 self.assertTrue(alert.add_target("Shadow Bow", "geek1781", watch, state_file=state, accounts_file=accounts, price_file=prices, inventory=FakeInventory()))
                 notified = []
-                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append), [])
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), notified.append,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
                 self.assertEqual(notified, [])
                 key = alert._target_key({"name": "Shadow Bow", "conta": "geek1781"})
                 self.assertEqual(alert._read_json(state, {})["target_baselines"][key]["accounts"]["conta 1 (geek1781)"], 4)
                 write_json(accounts, {"contas": [{"nome": "Conta 1 (geek1781)", "save": json.dumps({"Shadow Bow": 5})}]})
-                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append)
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), notified.append,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
             self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1 (geek1781)", "qtd": 1}])
             self.assertEqual(notified, hits)
 
@@ -343,11 +349,15 @@ class TestAlertData(unittest.TestCase):
                 self.assertEqual(alert.poll_once(
                     state, watch, accounts, prices, inventory,
                     lambda hit: self.fail("nao deve avisar ao definir a primeira linha de base"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
                 ), [])
                 write_json(accounts, {"contas": [{
                     "nome": "Conta 1 (geek1781)", "save": json.dumps({"Shadow Bow": 5})
                 }]})
-                hits = alert.poll_once(state, watch, accounts, prices, inventory, lambda hit: None)
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, inventory, lambda hit: None,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
         self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1 (geek1781)", "qtd": 1}])
 
     def test_linha_de_base_nao_avisa_por_item_que_ja_tinha(self):
@@ -360,8 +370,14 @@ class TestAlertData(unittest.TestCase):
             write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 4})}]})
             write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
             with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
-                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm")), [])
-                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm")), [])
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
 
     def test_avisa_um_novo_drop_e_nao_repete_depois(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -373,13 +389,22 @@ class TestAlertData(unittest.TestCase):
             write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 0})}]})
             write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
             with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
-                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
                 write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})}]})
                 notified = []
-                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append)
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), notified.append,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
                 self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}])
                 self.assertEqual(notified, hits)
-                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("duplicate alarm")), [])
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("duplicate alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
             data = alert._read_json(watch, {})
             self.assertEqual(len(data["hits"]), 1)
             self.assertEqual(data["hits"][0]["conta"], "Conta 1")
@@ -397,12 +422,18 @@ class TestAlertData(unittest.TestCase):
             ]})
             write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
             with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
-                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
                 write_json(accounts, {"contas": [
                     {"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 0})},
                     {"nome": "Conta 2", "save": json.dumps({"Shadow Bow": 9})},
                 ]})
-                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: None)
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: None,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
             self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 2", "qtd": 1}])
 
     def test_save_com_falha_preserva_ultima_leitura_sem_alarme(self):
@@ -415,9 +446,15 @@ class TestAlertData(unittest.TestCase):
             write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 2})}]})
             write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
             with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
-                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
                 write_json(accounts, {"contas": [{"nome": "Conta 1", "save": "broken"}]})
-                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm")), [])
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
             self.assertEqual(alert._read_json(state, {})["accounts"]["Conta 1"]["Shadow Bow"], 2)
 
     def test_nova_conta_tem_linha_de_base_sem_alerta_falso(self):
@@ -430,17 +467,26 @@ class TestAlertData(unittest.TestCase):
             write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})}]})
             write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
             with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
-                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
                 write_json(accounts, {"contas": [
                     {"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})},
                     {"nome": "Conta 2", "save": json.dumps({"Shadow Bow": 5})},
                 ]})
-                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("new account false alarm")), [])
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("new account false alarm"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
                 write_json(accounts, {"contas": [
                     {"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})},
                     {"nome": "Conta 2", "save": json.dumps({"Shadow Bow": 6})},
                 ]})
-                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: None)
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), lambda hit: None,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
             self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 2", "qtd": 1}])
 
     def test_find_new_drops_respeita_a_conta_do_alvo(self):
