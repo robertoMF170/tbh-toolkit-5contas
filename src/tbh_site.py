@@ -1364,6 +1364,47 @@ function farmAction(action,name,conta){
     toast((data.message||'Lista de alertas atualizada.')+' — o run.bat mantém a vigia ativa.');return data;
   }).catch(function(error){if(bar){bar.classList.add('show');bar.textContent=error.message||'Não foi possível falar com o run.bat. Abre-o e volta a tentar.';}throw error;});
 }
+function farmEscape(value){
+  return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});
+}
+window.farmToggle=function(button){
+  if(button.dataset.busy==='1')return;
+  var name=button.getAttribute('data-farm')||'';
+  if(!name)return;
+  button.dataset.busy='1';button.disabled=true;
+  farmAction(button.classList.contains('on')?'remove':'add',name,farmAccountForButton(button))
+    .catch(function(){})
+    .finally(function(){button.dataset.busy='';button.disabled=false;});
+};
+function refreshFarmWatchBar(){
+  if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__){renderFarmWatchBar(window.__FARM_WATCH__||{targets:[],hits:[]});return;}
+  farmApi().then(function(data){
+    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};
+    syncFarmButtons(window.__FARM_WATCH__);renderFarmWatchBar(window.__FARM_WATCH__);
+  }).catch(function(){});
+}
+function renderFarmWatchBar(w){
+  var bar=document.getElementById('farmWatchBar');if(!bar||!w)return;
+  var targets=w.targets||[],allHits=w.hits||[],pending=allHits.filter(function(hit){return !hit.acknowledged;});
+  if(!targets.length&&!pending.length){bar.classList.remove('show');bar.innerHTML='';return;}
+  var html='<h4>🎯 ALERTAS DE FARM — <span style="color:#7ee787">'+targets.length+' alvo(s)</span> · atualização automática</h4>';
+  if(targets.length){
+    html+='<div class="fw-tags">';targets.forEach(function(target){
+      var name=String(target.name||'?'),account=String(target.conta||''),quantity=0;
+      allHits.forEach(function(hit){var wanted=account.trim().toLowerCase(),actual=String(hit.conta||'').trim().toLowerCase();if(String(hit.name||'').trim().toLowerCase()===name.trim().toLowerCase()&&(!wanted||actual===wanted||actual.endsWith('('+wanted+')')))quantity+=Math.max(0,parseInt(hit.qtd,10)||0);});
+      html+='<span class="fw-tag"><b>'+farmEscape(name)+'</b><span style="color:#a89878">'+farmEscape(account?' @ '+account:' @ todas')+' · '+quantity+' encontrada(s)</span><button type="button" data-farm-action="remove" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">Parar</button></span>';
+    });html+='</div>';}
+  pending.slice(-3).forEach(function(hit){var name=String(hit.name||'?'),account=String(hit.conta||'?');html+='<div class="fw-hit">🔔 <b>'+farmEscape(name)+'</b> @ '+farmEscape(account)+' ×'+(parseInt(hit.qtd,10)||1)+' — drop encontrado <button type="button" data-farm-action="ack" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">✓ Confirmar</button></div>';});
+  html+='<div style="margin-top:6px;font-size:11px;color:#a89878">O run.bat consulta os saves a cada 2 segundos. Nao precisas de autorizar Python nem janelas do browser.</div>';
+  bar.innerHTML=html;
+  bar.querySelectorAll('[data-farm-action]').forEach(function(button){button.addEventListener('click',function(){
+    button.disabled=true;
+    farmAction(button.dataset.farmAction,button.dataset.name,button.dataset.conta)
+      .catch(function(){})
+      .finally(function(){button.disabled=false;});
+  });});
+  bar.classList.add('show');
+}
 function restoreFarmToSidebar(i){
   var dst = document.getElementById('farmBottom');
   var src = document.getElementById('sw'+i);
@@ -1854,13 +1895,12 @@ def main() -> None:
 <div id="modal" class="hidden">
   <div class="mbox">
     <h3>IMPORTAR BUILD NOVA</h3>
-    <p class="mhint">Cola o link da build do tbhindex.com e o Python corre SOZINHO: confirma ABRIR se o browser perguntar. (Se nunca abriu nada, corre uma vez no terminal: <b>python tbh_site.py --install-protocol</b>.) O comando manual fica em baixo, para o caso de precisares.</p>
+    <p class="mhint">Cola o link da build do tbhindex.com. A build e adicionada automaticamente pela dashboard aberta no run.bat, sem abrir Python nem pedir autorizacao ao browser.</p>
     <input id="murl" type="url" placeholder="https://tbhindex.com/pt/builds/NNN" spellcheck="false">
     <div class="mbtns">
-      <button id="mgo" class="primary">GERAR COMANDO</button>
+      <button id="mgo" class="primary">ADICIONAR BUILD</button>
       <button id="mclose">Fechar</button>
     </div>
-    <div id="mcmd" class="cmdbox hidden" title="Clica para copiar"></div>
     <div id="mstatus"></div>
   </div>
 </div>
@@ -1877,7 +1917,6 @@ def main() -> None:
 <script>
 __JS__
 </script>
-<script src="/src/tbh_site.js"></script>
 <script>
 (function(){
   var VB_URL = (location.protocol === 'http:' || location.protocol === 'https:') ? location.origin + '/api/visitas' : 'http://localhost:8765/api/visitas';

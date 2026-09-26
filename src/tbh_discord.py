@@ -23,17 +23,21 @@ MAX_ATTEMPTS = 3
 
 
 def discord_enabled(enabled_file: str = ENABLED_FILE) -> bool:
-    """Read the local opt-in; preserve legacy/manual setup when no choice is saved."""
+    """Read the saved opt-in first; an explicit choice always beats environment defaults."""
+    try:
+        with open(enabled_file, encoding="utf-8") as fh:
+            saved = fh.read().strip().casefold()
+        return saved in {"1", "true", "yes", "s", "sim", "on"}
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # Fail closed: an unreadable preference must never turn on notifications.
+        return False
+
     override = os.environ.get("TBH_DISCORD_ENABLED")
     if override is not None:
         return override.strip().casefold() in {"1", "true", "yes", "s", "sim", "on"}
-    try:
-        with open(enabled_file, encoding="utf-8") as fh:
-            return fh.read().strip().casefold() not in {"0", "false", "no", "nao", "não", "off"}
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True
+    return False
 
 
 def set_discord_enabled(enabled: bool, enabled_file: str = ENABLED_FILE) -> None:
