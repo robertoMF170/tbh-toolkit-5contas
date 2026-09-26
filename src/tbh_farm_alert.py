@@ -136,9 +136,19 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
             current[account] = folded_old[account.casefold()]
     # Keep an explicit empty baseline for unreadable accounts. Otherwise poll_once
     # could mistake an older global snapshot for the moment this target was added.
-    old_baselines[_target_key({"name": name, "conta": conta})] = {
-        "accounts": {account.casefold(): _item_count(items, name) for account, items in readable_current.items()}
+    baseline_accounts = {
+        account.casefold(): _item_count(items, name)
+        for account, items in readable_current.items()
     }
+    if selected_account:
+        # Ignore snapshots from other accounts retained in old_state: this target
+        # must only compare against the account explicitly selected by the user.
+        baseline_accounts = {
+            account.casefold(): _item_count(items, name)
+            for account, items in readable_current.items()
+            if account.casefold() == selected_account.casefold()
+        }
+    old_baselines[_target_key({"name": name, "conta": conta})] = {"accounts": baseline_accounts}
     state.update({"version": 1, "accounts": {**old_accounts, **current}, "target_baselines": old_baselines})
 
     _write_json_atomic(state_file, state)
@@ -532,7 +542,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
 
     _write_json_atomic(state_file, {
         "version": 1,
-        "accounts": current,
+        "accounts": {**previous, **current},
         "target_baselines": next_baselines,
     })
 
@@ -597,8 +607,9 @@ def watch(interval: float = 2.0) -> None:
         except (Exception, SystemExit) as exc:
             error = type(exc).__name__
             fallback_targets = locals().get("targets", [])
-            fallback_accounts = locals().get("accounts", [])
-            _write_heartbeat(fallback_targets, fallback_accounts, interval, status="error", error=error)
+            fallback_accounts = locals().get("configured_accounts", [])
+            fallback_watched = locals().get("watched_accounts", [])
+            _write_heartbeat(fallback_targets, fallback_accounts, interval, status="error", error=error, watched_accounts=fallback_watched)
             print(f"[FARM] Erro no ciclo de vigia ({error}): {exc}", flush=True)
         time.sleep(max(0.1, interval - (time.monotonic() - started)))
 
@@ -662,6 +673,9 @@ def main(argv: list[str] | None = None) -> int:
                 print("ERRO: o vigia esta vivo, mas nao carregou contas. Confirma config/baus.json.")
             if status == "account_not_found":
                 print("ERRO: a conta associada a um alvo nao foi encontrada no ficheiro de contas.")
+            if status in {"starting", "scanning"}:
+                print("VIGIA A ARRANCAR — a primeira leitura dos saves ainda esta em curso.")
+                return 3
             unreadable = heartbeat.get("unreadable_accounts", [])
             if isinstance(unreadable, list) and unreadable:
                 print("Saves com erro de leitura: " + ", ".join(str(name) for name in unreadable))
@@ -670,6 +684,9 @@ def main(argv: list[str] | None = None) -> int:
             if status in {"no_accounts", "save_read_error", "partial_warning", "account_not_found", "error"} or heartbeat.get("error") or unreadable:
                 print("AVISO: processo ativo, mas ha erros que podem impedir alguns alertas; corrige os detalhes acima.")
                 return 2
+            if status == "waiting_for_targets":
+                print("VIGIA ATIVO, a espera — clica Farmar na dashboard para comecar os alertas.")
+                return 4
             return 0
         if heartbeat["alive"] and heartbeat.get("status") in {"starting", "scanning"}:
             print("VIGIA A ARRANCAR — primeira leitura dos saves ainda em curso.")

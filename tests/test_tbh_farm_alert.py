@@ -44,6 +44,7 @@ class TestAlertData(unittest.TestCase):
             "alive": True,
             "age_seconds": 1,
             "accounts": ["Conta 1 (geek1781)"],
+            "watched_accounts": ["Conta 1 (geek1781)"],
             "targets": [{"name": "Shadow Bow", "conta": "geek1781"}],
             "target_count": 1,
             "account_count": 1,
@@ -57,6 +58,7 @@ class TestAlertData(unittest.TestCase):
             result = alert.main(["--status", "--conta", "geek1781"])
         self.assertEqual(result, 0)
         self.assertIn("VIGIA ATIVO", output.getvalue())
+        self.assertIn("Contas vigiadas: Conta 1 (geek1781)", output.getvalue())
         self.assertIn("geek1781 -> Conta 1 (geek1781)", output.getvalue())
 
     def test_conta_explicita_restringe_a_leitura_a_conta_alias(self):
@@ -113,6 +115,34 @@ class TestAlertData(unittest.TestCase):
         self.assertTrue(ativo["alive"])
         self.assertEqual(ativo["status"], "active")
         self.assertFalse(expirado["alive"])
+
+    def test_snapshot_falhado_nao_reutiliza_baseline_antiga_de_outra_conta(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [], "hits": []})
+            write_json(accounts, {"contas": [{
+                "nome": "Conta 1 (geek1781)", "save": "broken"
+            }]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            write_json(state, {
+                "accounts": {"Conta 1 (geek1781)": {"Shadow Bow": 4}},
+                "target_baselines": {},
+            })
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+            ):
+                self.assertTrue(alert.add_target(
+                    "Shadow Bow", "geek1781", watch,
+                    state_file=state, accounts_file=accounts,
+                    price_file=prices, inventory=FakeInventory(),
+                ))
+            key = alert._target_key({"name": "Shadow Bow", "conta": "geek1781"})
+            self.assertEqual(alert._read_json(state, {})["target_baselines"][key]["accounts"], {})
 
     def test_adiciona_remove_e_confirma_alvos_e_hits(self):
         with tempfile.TemporaryDirectory() as tmp:

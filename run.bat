@@ -159,10 +159,14 @@ start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2
 echo       A verificar arranque do processo...
 timeout /t 2 /nobreak >nul
 python -X utf8 src\tbh_farm_alert.py --status --interval 2
+if errorlevel 4 goto farm_status_waiting
 if errorlevel 3 goto farm_status_starting
 if errorlevel 2 goto farm_status_warning
 if errorlevel 1 goto farm_status_inactive
 echo [FARM] OK — deixa esta janela aberta; o estado atualiza a cada 2 segundos.
+goto farm_status_done
+:farm_status_waiting
+echo [FARM] ATIVO E A ESPERA DE ALVOS — clica Farmar na dashboard e confirma Abrir Python no browser.
 goto farm_status_done
 :farm_status_starting
 echo [FARM] PROCESSO A ARRANCAR — verifica o estado com python -X utf8 src\tbh_farm_alert.py --status quando terminar.
