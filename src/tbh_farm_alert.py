@@ -30,6 +30,7 @@ ACCOUNTS_FILE = _first_existing([
     os.path.join(BASE, "baus.json"),
 ])
 STATE_FILE = os.path.join(ROOT, "var", "farm_alert_state.json")
+LOCK_FILE = os.path.join(ROOT, "var", "farm_alert.lock")
 # The legacy tbh_farm_watch.py writes a plain-text timestamp to its own
 # farm_watch.heartbeat; keep this JSON health marker separate.
 HEARTBEAT_FILE = os.path.join(ROOT, "var", "farm_alert.heartbeat")
@@ -63,6 +64,52 @@ def _write_json_atomic(path: str, data: dict) -> None:
                 os.remove(temp_path)
         except OSError:
             pass
+
+
+def _acquire_watch_lock(path: str = LOCK_FILE) -> int | None:
+    """Acquire a process-wide lock so restarting run.bat cannot duplicate polling."""
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if os.fstat(fd).st_size == 0:
+            os.write(fd, b"\0")
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except OSError:
+        os.close(fd)
+        return None
+
+
+def _release_watch_lock(fd: int) -> None:
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _watch_process_running(path: str = LOCK_FILE) -> bool:
+    """Check the OS lock, so a stale heartbeat never claims a dead process is active."""
+    fd = _acquire_watch_lock(path)
+    if fd is None:
+        return True
+    _release_watch_lock(fd)
+    return False
 
 
 def _watch_data(path: str = WATCH_FILE) -> dict:
@@ -235,7 +282,9 @@ def resolve_account_name(requested: str, accounts: list[dict]) -> str | None:
 
 def _accounts_for_targets(targets: list[dict], accounts: list[dict]) -> list[dict]:
     """Limit explicit-account alerts to those saves; unscoped alerts need all accounts."""
-    if not targets or any(not str(target.get("conta") or "").strip() for target in targets):
+    if not targets:
+        return []
+    if any(not str(target.get("conta") or "").strip() for target in targets):
         return accounts
     selected = {
         resolved.casefold()
@@ -638,6 +687,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.status:
         heartbeat = watcher_status(interval=args.interval)
+        heartbeat["process_running"] = _watch_process_running()
+        heartbeat["alive"] = heartbeat["alive"] and heartbeat["process_running"]
         account_rows = heartbeat.get("accounts", [])
         status_accounts = [
             {"name": str(name).strip()}
@@ -701,7 +752,20 @@ def main(argv: list[str] | None = None) -> int:
         print("VIGIA INATIVO — sem heartbeat recente. Abre o run.bat e deixa-o aberto.")
         return 1
     if args.watch:
-        watch(max(0.5, min(args.interval, 60.0)))
+        lock_fd = _acquire_watch_lock()
+        if lock_fd is None:
+            print("[FARM] Ja existe um vigia ativo; nao vou iniciar outro.", flush=True)
+            return 5
+        try:
+            try:
+                os.remove(HEARTBEAT_FILE)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print(f"[FARM] Nao consegui limpar heartbeat antigo: {exc}", flush=True)
+            watch(max(0.5, min(args.interval, 60.0)))
+        finally:
+            _release_watch_lock(lock_fd)
         return 0
     poll_once()
     return 0

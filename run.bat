@@ -155,10 +155,17 @@ if not exist "%~dp0src\tbh_farm_alert.py" goto sem_farm_alert
 :iniciar_farm_alert
 echo [FARM] A arrancar vigia nesta janela; poll dos saves a cada 2 segundos.
 echo       Clica Farmar. Titulo = item/conta; popup aparece no drop encontrado.
+if exist "%~dp0var\farm_alert.heartbeat" del "%~dp0var\farm_alert.heartbeat" >nul 2>&1
 start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2
+if errorlevel 1 goto farm_already_running
 echo       A verificar arranque do processo...
 timeout /t 2 /nobreak >nul
 python -X utf8 src\tbh_farm_alert.py --status --interval 2
+if errorlevel 1 (
+  echo       A vigia ainda nao ficou pronta; nova verificacao em 3 segundos...
+  timeout /t 3 /nobreak >nul
+  python -X utf8 src\tbh_farm_alert.py --status --interval 2
+)
 if errorlevel 4 goto farm_status_waiting
 if errorlevel 3 goto farm_status_starting
 if errorlevel 2 goto farm_status_warning
@@ -177,6 +184,13 @@ goto farm_status_done
 :farm_status_inactive
 echo [FARM] VIGIA INATIVO. Verifica o Python e os caminhos dos saves em config\baus.json.
 :farm_status_done
+echo.
+goto farm_alert_done
+:farm_already_running
+echo [FARM] Ja existe uma vigia ativa; nao iniciei uma copia. A verificar o estado atual...
+python -X utf8 src\tbh_farm_alert.py --status --interval 2
+if errorlevel 2 echo [FARM] A vigia anterior esta ativa, mas reporta erros; le a mensagem acima.
+if errorlevel 1 echo [FARM] Nao foi possivel confirmar a vigia existente; verifica se o comando --watch antigo terminou.
 echo.
 goto farm_alert_done
 

@@ -54,7 +54,11 @@ class TestAlertData(unittest.TestCase):
             "unreadable_accounts": [],
         }
         output = io.StringIO()
-        with mock.patch.object(alert, "watcher_status", return_value=heartbeat), redirect_stdout(output):
+        with (
+            mock.patch.object(alert, "watcher_status", return_value=heartbeat),
+            mock.patch.object(alert, "_watch_process_running", return_value=True),
+            redirect_stdout(output),
+        ):
             result = alert.main(["--status", "--conta", "geek1781"])
         self.assertEqual(result, 0)
         self.assertIn("VIGIA ATIVO", output.getvalue())
@@ -115,6 +119,17 @@ class TestAlertData(unittest.TestCase):
         self.assertTrue(ativo["alive"])
         self.assertEqual(ativo["status"], "active")
         self.assertFalse(expirado["alive"])
+
+    def test_lock_do_vigia_e_exclusivo_e_libertado(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = os.path.join(tmp, "watch.lock")
+            owner = alert._acquire_watch_lock(lock)
+            self.assertIsNotNone(owner)
+            try:
+                self.assertTrue(alert._watch_process_running(lock))
+            finally:
+                alert._release_watch_lock(owner)
+            self.assertFalse(alert._watch_process_running(lock))
 
     def test_snapshot_falhado_nao_reutiliza_baseline_antiga_de_outra_conta(self):
         with tempfile.TemporaryDirectory() as tmp:
