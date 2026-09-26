@@ -179,7 +179,7 @@ def post_webhook(url: str, payload: dict, timeout: float = REQUEST_TIMEOUT_SECON
 def send_alert(hit: dict, *, webhook_url: str | None = None,
                mention_id: str | None = None, transport=None,
                test: bool = False, sleep=None) -> bool:
-    """Send once, retrying explicit Discord 429 and server failures (not timeouts)."""
+    """Send once; retry only explicit 429 responses, never ambiguous POST failures."""
     configured_url, configured_user = discord_settings()
     url = configured_url if webhook_url is None else str(webhook_url).strip()
     user_id = configured_user if mention_id is None else str(mention_id).strip()
@@ -221,7 +221,7 @@ def send_alert(hit: dict, *, webhook_url: str | None = None,
             else:
                 print("[FARM] Alerta Discord enviado." + (" Mencao autorizada incluida." if user_id else " Sem ID de utilizador; sem mencao."), flush=True)
             return True
-        if (status == 429 or status >= 500) and attempt + 1 < MAX_ATTEMPTS:
+        if status == 429 and attempt + 1 < MAX_ATTEMPTS:
             delay = retry_after if retry_after is not None else 0.5 * (2 ** attempt)
             sleeper(max(0.1, min(delay, 3.0)))
             continue

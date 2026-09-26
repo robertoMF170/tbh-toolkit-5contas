@@ -30,6 +30,16 @@ def write_json(path, value):
 
 
 class TestAlertData(unittest.TestCase):
+    def test_notify_drop_envia_discord_sem_impedir_alerta_local(self):
+        hit = {"name": "Mystic Gloves (Divine) A", "conta": "Conta 1 (geek1781)", "qtd": 1}
+        with (
+            mock.patch.object(alert.tbh_discord, "send_alert") as send,
+            mock.patch.object(alert.os, "name", "posix"),
+            redirect_stdout(io.StringIO()),
+        ):
+            alert.notify_drop(hit)
+        send.assert_called_once_with(hit)
+
     def test_resolve_conta_por_nome_e_alias_steam(self):
         accounts = [
             {"name": "Conta 1 (geek1781)"},
