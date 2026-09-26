@@ -970,6 +970,8 @@ const B=__DATA__;
 const DROP_MAP=__DROP_MAP__;
 const MAP_POS=__MAP_POS__;
 window.__FARM_WATCH__=__FARM_WATCH_JSON__;
+window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN__';
+const FARM_API_URL=(location.protocol==='http:' && (location.hostname==='127.0.0.1'||location.hostname==='localhost'))?location.origin+'/api/farm':'';
 const N=B.titles.length;
 const zS=B.w.map((w,i)=>makeZoom('viewSkills','skz'+i,w,0.7));
 const zR=makeZoom('viewRunes','runesZoomer',B.rw,0.5);
@@ -1301,37 +1303,69 @@ window.farmSort=function(btn){
   var siblings = btn.parentElement.querySelectorAll('.ffilt');
   siblings.forEach(function(x){ x.classList.toggle('on', x===btn); });
 };
+function farmEscape(value){
+  return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});
+}
+function farmAccountForButton(btn){
+  var conta=btn.getAttribute('data-conta')||'';
+  try{ if(!conta && typeof cur!=='number') cur=-1; if(!conta && cur>=0 && B.urls && B.urls[cur]){ var u=B.urls[cur]||''; var m=u.match(/\|user=([^|]+)/); if(m) conta=m[1]; } }catch(e){}
+  return conta;
+}
+function farmApi(action,name,conta){
+  if(!FARM_API_URL || !window.__TBH_FARM_API_TOKEN__ || window.__TBH_FARM_API_TOKEN__==='__TBH_FARM_API_TOKEN__'){
+    return Promise.reject(new Error('Abre a dashboard pelo run.bat para registar alertas sem permissões do browser.'));
+  }
+  var options={method:'GET',headers:{'X-TBH-Farm-Token':window.__TBH_FARM_API_TOKEN__},cache:'no-store'};
+  if(action){
+    options.method='POST';
+    options.headers['Content-Type']='application/json';
+    options.body=JSON.stringify({action:action,name:name,conta:conta||''});
+  }
+  return fetch(FARM_API_URL,options).then(function(response){
+    return response.json().then(function(data){
+      if(!response.ok||!data.ok) throw new Error(data.erro||'Não foi possível atualizar os alertas.');
+      return data;
+    });
+  });
+}
+function farmTargetMatchesButton(target,btn){
+  var name=(btn.getAttribute('data-farm')||'').trim().toLowerCase();
+  var targetName=String(target.name||'').trim().toLowerCase();
+  if(name!==targetName) return false;
+  var account=farmAccountForButton(btn).trim().toLowerCase();
+  var targetAccount=String(target.conta||'').trim().toLowerCase();
+  return !targetAccount || !account || targetAccount===account || account.endsWith('('+targetAccount+')');
+}
+function syncFarmButtons(w){
+  var targets=(w&&w.targets)||[];
+  document.querySelectorAll('.ffarmbtn').forEach(function(btn){
+    var active=targets.some(function(target){return farmTargetMatchesButton(target,btn);});
+    btn.classList.toggle('on',active);
+    btn.textContent=active?'🔔 A vigiar':'🎯 Vigiar item';
+    btn.title=active?'Este item está na lista de alertas. Clica para deixar de vigiar.':'Adicionar este item à lista de alertas, sem abrir janelas do browser.';
+  });
+}
+function farmAction(action,name,conta){
+  toast(action==='remove'?'A remover o alerta…':action==='ack'?'A confirmar o drop…':'A registar o item…');
+  return farmApi(action,name,conta).then(function(data){
+    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};
+    syncFarmButtons(window.__FARM_WATCH__);
+    renderFarmWatchBar(window.__FARM_WATCH__);
+    toast((data.message||'Lista de alertas atualizada.')+' O run.bat continua a vigiar em segundo plano.');
+    return data;
+  }).catch(function(error){
+    toast(error.message||'Não foi possível comunicar com a vigia local. Abre a dashboard pelo run.bat.');
+    throw error;
+  });
+}
 window.farmToggle=function(btn){
   if(btn.dataset.busy==='1') return;
   var name=btn.getAttribute('data-farm')||'';
   if(!name) return;
-  var conta=btn.getAttribute('data-conta')||'';
-  // curBuild identifica a build aberta para fallback |user= se data-conta vier vazio
-  try{ if(!conta && typeof cur!=='number') cur=-1; if(!conta && cur>=0 && B.urls && B.urls[cur]){ var u=B.urls[cur]||''; var m=u.match(/\|user=([^|]+)/); if(m) conta=m[1]; } }catch(e){}
-  var on = btn.classList.contains('on');
-  var action = on ? 'rm' : 'add';
-  var url = 'tbh://farm?'+action+'='+encodeURIComponent(name) + (conta ? '&conta='+encodeURIComponent(conta) : '');
-  btn.dataset.busy='1';
-  setTimeout(function(){ btn.dataset.busy=''; }, 2500);
-  var cmd = 'python src\\tbh_farm_alert.py --'+action+' '+JSON.stringify(name) + (conta ? ' --conta '+JSON.stringify(conta) : '');
-  // O protocolo só regista/remove o alvo; o vigia contínuo corre no run.bat principal.
-  try{ location.href=url; }catch(e){}
-  // feedback visual imediato (optimistic)
-  if(on){
-    btn.classList.remove('on'); btn.textContent='🎯 Farmar'; btn.title='Farmar — vigia saves a cada 2s e toca alarme';
-    toast('A remover: '+name+(conta?' @ '+conta:'')+'\nSe o protocolo nao abriu, corre: '+cmd, cmd);
-    // limpa optimistic across builds se tirar
-    document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.remove('on'); b.textContent='🎯 Farmar'; });
-  } else {
-    btn.classList.add('on'); btn.textContent='✅ Alerta pedido'; btn.title='Pedido enviado ao protocolo tbh://; confirma Abrir Python e mantém run.bat aberto' + (conta?' @ '+conta:'');
-    var msgConta = conta ? ('Conta: '+conta+' — vigia só essa.') : 'A vigiar TODAS — deteta sozinho qual conta droppou.';
-    toast('A registar alerta: '+name+'\n'+msgConta+' O aviso "Abrir Python?" do browser e normal: autoriza o protocolo tbh:// a registar o alvo. Para receber alertas, deixa run.bat aberto e confirma [FARM] OK.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
-    // optimistic: marca todos botões com mesmo nome (várias tabs, FARM POSSÍVEL + FARM OP)
-    document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.add('on'); b.textContent='✅ Alerta pedido'; });
-    if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_alert.py --add '+JSON.stringify(name)+(conta?' --conta '+JSON.stringify(conta):'')).catch(()=>{});
-  }
-  if(on) copyText(cmd).catch(()=>{});
-  setTimeout(refreshFarmWatchBar, 900);
+  var action=btn.classList.contains('on')?'remove':'add';
+  var conta=farmAccountForButton(btn);
+  btn.dataset.busy='1'; btn.disabled=true;
+  farmAction(action,name,conta).catch(function(){}).finally(function(){btn.dataset.busy='';btn.disabled=false;});
 };
 window.farmSortGlobal=function(btn){
   var mode=btn.getAttribute('data-sort');
@@ -1380,15 +1414,15 @@ function restoreFarmToSidebar(i){
   document.getElementById('buildview').classList.remove('with-farm');
 }
 function refreshFarmWatchBar(){
-  try{
-    // farm_watch.json nao e legivel do browser file:// — tenta fetch se http, senao usa B meta se injected
-    var bar=document.getElementById('farmWatchBar');
-    if(!bar) return;
-    // se B tiver farmWatch meta (injectado pelo python), renderiza
-    if(window.__FARM_WATCH__){
-      renderFarmWatchBar(window.__FARM_WATCH__);
-    }
-  }catch(e){}
+  if(!FARM_API_URL||!window.__TBH_FARM_API_TOKEN__){
+    if(window.__FARM_WATCH__)renderFarmWatchBar(window.__FARM_WATCH__);
+    return;
+  }
+  farmApi().then(function(data){
+    window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};
+    syncFarmButtons(window.__FARM_WATCH__);
+    renderFarmWatchBar(window.__FARM_WATCH__);
+  }).catch(function(){});
 }
 function renderFarmWatchBar(w){
   var bar=document.getElementById('farmWatchBar');
@@ -1843,9 +1877,9 @@ def main() -> None:
   <div class="homewrap">
     <h1>AS MINHAS BUILDS</h1>
     <div class="sub">Clica numa build para ver a arvore de skills (ordem na coluna direita) e o mapa de runas com o caminho perfeito desta build.</div>
-    <div id="farmbar"><span id="farmdot" class="dot"></span><b style="font-size:12px;color:#ffd86b;">FARM EM CICLO</b><small id="farmtxt">a atualizar sozinho a cada 15 min — deixa o farm a correr</small><span id="farmwarn" class="farmwarn">⚠ FARM PARADO — reabre atualizar_baus_agora.bat</span><span style="flex:1"></span><button id="farmtoggle" type="button">⏸ pausar</button></div>
-    <div id="farmWatchBar"></div>
-    <div id="farmRunHint" style="font-size:11px;color:#a89878;margin:6px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><span>Queres ser avisado quando dropar?</span> <span style="background:#1d1913;border:1px solid #5a4e38;border-radius:6px;padding:2px 8px;">1) Clica <b style="color:#ffd86b">🎯 Farmar</b> no item → <small style="color:#a89878">regista o item no alerta do run.bat</small></span> <span style="background:#1d1913;border:1px solid #5a4e38;border-radius:6px;padding:2px 8px;">2) Mantém o <b style="color:#ffd86b">run.bat aberto</b> · verifica os saves a cada <b style="color:#7ee787">2s</b> e mostra popup quando encontrar o item.</span></div>
+  <div id="farmbar"><span id="farmdot" class="dot"></span><b style="font-size:12px;color:#ffd86b;">FARM EM CICLO</b><small id="farmtxt">a atualizar sozinho a cada 15 min — deixa o farm a correr</small><span id="farmwarn" class="farmwarn">⚠ FARM PARADO — reabre atualizar_baus_agora.bat</span><span style="flex:1"></span><button id="farmtoggle" type="button">⏸ pausar</button></div>
+  <div id="farmWatchBar"></div>
+  <div id="farmRunHint" style="font-size:11px;color:#a89878;margin:6px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><span>Queres ser avisado quando dropar?</span> <span style="background:#1d1913;border:1px solid #5a4e38;border-radius:6px;padding:2px 8px;">Clica <b style="color:#ffd86b">🎯 Vigiar item</b> para adicionar/remover o alerta — sem pop-ups ou autorizações do browser. Mantém o <b style="color:#7ee787">run.bat aberto</b>.</span></div>
     __BAUS__
     __FARMOP__
     <div class="cards">__CARDS__</div>

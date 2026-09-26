@@ -16,15 +16,17 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
 import os
+import secrets
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(AQUI)
@@ -215,7 +217,7 @@ class VisitasHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "null" if origin == "null" else origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-TBH-Farm-Token")
         self.send_header("Access-Control-Max-Age", "600")
 
     def _json(self, payload, codigo=200):
@@ -238,14 +240,22 @@ class VisitasHandler(BaseHTTPRequestHandler):
         if not (alvo == real_base or alvo.startswith(real_base + os.sep)):
             self._json({"erro": "caminho invalido"}, 403)
             return
-        relative_parts = os.path.relpath(alvo, real_base).replace("\\\\", "/").split("/")
-        if any(
-            part.startswith(".")
-            or part.casefold() in {"config", "var"}
-            or part.casefold().endswith((".env", ".es3"))
-            for part in relative_parts
+        relative_parts = os.path.relpath(alvo, real_base).replace("\\", "/").split("/")
+        allowed_static = (
+            len(relative_parts) >= 2
+            and relative_parts[0].casefold() == "assets"
+            and os.path.splitext(alvo)[1].casefold() in {
+                ".css", ".gif", ".ico", ".jpeg", ".jpg", ".js", ".png", ".svg", ".webp", ".woff", ".woff2"
+            }
+        ) or (
+            len(relative_parts) >= 3
+            and [part.casefold() for part in relative_parts[:2]] == ["data", "tbhdata"]
+            and os.path.splitext(alvo)[1].casefold() in {".css", ".js", ".png", ".svg"}
+        )
+        if any(part.startswith(".") for part in relative_parts) or not (
+            relative_parts == ["minhas_builds.html"] or allowed_static
         ):
-            self._json({"erro": "ficheiro privado"}, 404)
+            self._json({"erro": "ficheiro privado ou nao publicado"}, 404)
             return
         if not os.path.isfile(alvo):
             self._json({"erro": "nao encontrado"}, 404)
@@ -266,6 +276,9 @@ class VisitasHandler(BaseHTTPRequestHandler):
         except OSError:
             self._json({"erro": "nao foi possivel ler"}, 500)
             return
+        if relative_parts == ["minhas_builds.html"]:
+            token = getattr(self.server, "tbh_farm_token", "")
+            corpo = corpo.replace(b"__TBH_FARM_API_TOKEN__", token.encode("ascii"))
         self.send_response(200)
         self.send_header("Content-Type", tipos.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(corpo)))
@@ -278,6 +291,19 @@ class VisitasHandler(BaseHTTPRequestHandler):
         rota = self.path.split("?", 1)[0]
         if rota == "/api/health":
             self._json({"ok": True, "farm_api": 1})
+        elif rota == "/api/farm":
+            if not self._farm_request_is_local() or not hmac.compare_digest(
+                self.headers.get("X-TBH-Farm-Token", ""),
+                getattr(self.server, "tbh_farm_token", ""),
+            ):
+                self._json({"ok": False, "erro": "Acesso local nao autorizado."}, 403)
+                return
+            try:
+                import tbh_farm_alert as farm_alert
+                watch_data = farm_alert._watch_data()
+                self._json({"ok": True, "targets": farm_alert.load_targets(), "hits": watch_data["hits"]})
+            except Exception:
+                self._json({"ok": False, "erro": "Nao foi possivel ler o estado dos alertas."}, 500)
         elif rota in ("/api/visitas", "/api/visitas/"):
             with _LOCK:
                 dados = carregar(_DB_PATH[0])
@@ -299,8 +325,13 @@ class VisitasHandler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             peer_is_local = False
         port = int(self.server.server_address[1])
-        allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-        allowed_origins = {f"http://{host}" for host in allowed_hosts}
+        bound_host = str(self.server.server_address[0]).lower()
+        allowed_hosts = {f"localhost:{port}"}
+        if bound_host == "0.0.0.0":
+            allowed_hosts.update({f"127.0.0.1:{port}", f"[::1]:{port}"})
+        elif bound_host in {"127.0.0.1", "::1"}:
+            allowed_hosts.add(f"{bound_host}:{port}" if bound_host != "::1" else f"[::1]:{port}")
+        allowed_origins = {f"http://{host}" for host in allowed_hosts} | {"null"}
         return (
             peer_is_local
             and self.headers.get("Host", "").lower() in allowed_hosts
@@ -310,7 +341,10 @@ class VisitasHandler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         rota = self.path.split("?", 1)[0]
         if rota == "/api/farm":
-            if not self._farm_request_is_local():
+            if not self._farm_request_is_local() or not hmac.compare_digest(
+                self.headers.get("X-TBH-Farm-Token", ""),
+                getattr(self.server, "tbh_farm_token", ""),
+            ):
                 self._json({"ok": False, "erro": "Acoes de farm so podem ser usadas pela dashboard local."}, 403)
                 return
             if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
@@ -361,8 +395,10 @@ def arrancar(porta: int, root: str, db: str, verbose: bool = False,
              host: str = "127.0.0.1") -> ThreadingHTTPServer:
     _DB_PATH[0] = db
     httpd = ThreadingHTTPServer((host, porta), VisitasHandler)
+    httpd.tbh_bound_host = host
     httpd.tbh_root = root
     httpd.tbh_verbose = verbose
+    httpd.tbh_farm_token = secrets.token_urlsafe(32)
     return httpd
 
 
