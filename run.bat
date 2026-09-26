@@ -154,6 +154,7 @@ rem --- Alertas de farm: ficam nesta janela principal, sem abrir outro .bat ---
 if not exist "%~dp0src\tbh_farm_alert.py" goto sem_farm_alert
 if exist "%~dp0config\baus.json" goto iniciar_farm_alert
 if exist "%~dp0baus.json" goto iniciar_farm_alert
+if exist "%~dp0src\tbh_baus.py" goto iniciar_farm_alert
 goto sem_farm_alert
 
 :iniciar_farm_alert

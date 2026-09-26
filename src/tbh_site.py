@@ -1310,7 +1310,7 @@ window.farmToggle=function(btn){
   var on = btn.classList.contains('on');
   var action = on ? 'rm' : 'add';
   var url = 'tbh://farm?'+action+'='+encodeURIComponent(name) + (conta ? '&conta='+encodeURIComponent(conta) : '');
-  var cmd = 'python src\\tbh_farm_alert.py --'+action+' "'+name.replace(/"/g,'')+'"' + (conta ? ' --conta "'+conta.replace(/"/g,'')+'"' : '');
+  var cmd = 'python src\\tbh_farm_alert.py --'+action+' '+JSON.stringify(name) + (conta ? ' --conta '+JSON.stringify(conta) : '');
   // O protocolo só regista/remove o alvo; o vigia contínuo corre no run.bat principal.
   try{ location.href=url; }catch(e){}
   // feedback visual imediato (optimistic)
@@ -1322,12 +1322,12 @@ window.farmToggle=function(btn){
   } else {
     btn.classList.add('on'); btn.textContent='✅ Farmando'; btn.title='Ja a farmar — clica para parar' + (conta?' @ '+conta:'');
     var msgConta = conta ? ('Conta: '+conta+' — vigia só essa.') : 'A vigiar TODAS — deteta sozinho qual conta droppou.';
-    toast('Alerta registado: '+name+'\n'+msgConta+' O run.bat verifica os saves a cada 2s; deixa-o aberto.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
+    toast('A registar alerta: '+name+'\n'+msgConta+' O run.bat verifica os saves a cada 2s; deixa-o aberto.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
     // optimistic: marca todos botões com mesmo nome (várias tabs, FARM POSSÍVEL + FARM OP)
     document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.add('on'); b.textContent='✅ Farmando'; });
-    if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_alert.py --add "'+name+'"'+(conta?' --conta "'+conta+'"':'')).catch(()=>{});
+    if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_alert.py --add '+JSON.stringify(name)+(conta?' --conta '+JSON.stringify(conta):'')).catch(()=>{});
   }
-  copyText(cmd).catch(()=>{});
+  if(on) copyText(cmd).catch(()=>{});
   setTimeout(refreshFarmWatchBar, 900);
 };
 window.farmSortGlobal=function(btn){

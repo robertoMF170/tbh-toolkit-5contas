@@ -21,7 +21,7 @@ def _handle_farm(raw: str):
         def one(k):
             v = qs.get(k)
             if not v: return ""
-            return unquote(v[0])
+            return v[0]
 
         def adicionar(nome, conta_farm=""):
             if farm_alert.add_target(nome, conta_farm):
@@ -48,6 +48,7 @@ def _handle_farm(raw: str):
             count = farm_alert.acknowledge_hits(
                 nome,
                 all_hits=("ack-all" in q.lower() or "ack_all" in q.lower() or not nome),
+                conta=conta,
             )
             print(f"{count} alerta(s) confirmado(s).")
             return True
@@ -77,11 +78,11 @@ def main() -> None:
         raw = sys.argv[1] if len(sys.argv) > 1 else ""
         # farm protocol — novo
         if raw.lower().startswith("tbh://farm"):
-            handled = _handle_farm(raw)
-            # regenera site para reflectir estado Farmando
+            _handle_farm(raw)
+            # Regenera a dashboard com o alvo/hit mais recente.
             try:
                 subprocess.run([sys.executable, os.path.join(BASE, "tbh_site.py"), "--sem-abrir"], cwd=ROOT if os.path.isdir(os.path.join(ROOT, "config")) else BASE, timeout=20)
-                print("Site regenerado com estado Farmando.")
+                print("Site regenerado com o estado dos alertas de farm.")
             except Exception:
                 pass
             return

@@ -11,7 +11,7 @@ run.bat              :: confirma saves vs Steam Cloud, gera o site e abre o dash
 run.bat --forcar     :: (só com módulos locais) força arranque de todas as sandboxes
 ```
 
-O `run.bat` é o **único** arranque — os atalhos legados em `scripts/` apenas chamam este. Sem os módulos locais opcionais, o run gera apenas o site e abre o dashboard (a versão pública funciona assim).
+O `run.bat` é o **único** arranque — também mantém os alertas de drop a correr enquanto fica aberto. Os atalhos legados em `scripts/` apenas chamam este. Sem os módulos locais opcionais, o run gera o site e continua disponível para os alertas.
 
 Também podes correr diretamente:
 
@@ -42,6 +42,7 @@ Também corre sozinho: `python src\tbh_sync.py --pre` (ou `--auto` para não per
 - **SKILLS DO HEROI** — árvore de skills de cada build com a ordem de up.
 - **MAPA DE RUNAS** — rota ideal pela árvore global de 241 runas.
 - **FARM OP** (em baixo, horizontal) — filtros *Equilíbrio / Mais caros / Mais fácil vender / Mais fácil drop* e coluna *Dropa em* (zona + dificuldade).
+- **Alertas de drop** — clica *Farmar* num item; o `run.bat` verifica os saves de 2 em 2 segundos e mostra um popup com o item e a conta quando encontra um novo.
 - **Ver no mapa** — mapa estilo jogo, "para burros": em cima o **modo** e o **lugar do item**, passo a passo (Portal → modo → ato → andar) e a **bola pintada de verde** exatamente onde farmar; nas **Terras da Peste** mostra o **nível** e o **andar** (1–20).
 - **UPAR JÁ** — recomendações de progressão ligadas às builds.
 - **Inventário / baús** — ativos quando os módulos locais opcionais existem.

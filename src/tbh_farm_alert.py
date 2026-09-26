@@ -83,7 +83,9 @@ def load_targets(path: str = WATCH_FILE) -> list[dict]:
     ]
 
 
-def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE) -> bool:
+def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
+               state_file: str = STATE_FILE, accounts_file: str = ACCOUNTS_FILE,
+               price_file: str = PRICE_FILE, inventory=None) -> bool:
     name = str(name or "").strip()
     conta = str(conta or "").strip()
     if not name:
@@ -96,9 +98,37 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE) -> bool
             str(target.get("conta") or "").strip().casefold(),
         ) == key:
             return False
+
+    # Take a snapshot right when the user clicks Farmar, so existing inventory
+    # is not mistaken for a drop and the next 2s poll starts from this quantity.
+    state = _read_json(state_file, {})
+    if not isinstance(state, dict):
+        state = {}
+    old_accounts = state.get("accounts", {})
+    if not isinstance(old_accounts, dict):
+        old_accounts = {}
+    accounts = load_accounts(accounts_file)
+    if conta:
+        accounts = [account for account in accounts if account["name"].casefold() == conta.casefold()]
+    current, failed = scan_inventories(accounts, _market_names([{"name": name}], price_file), inventory)
+    folded_old = {str(account).casefold(): items for account, items in old_accounts.items()}
+    for account in failed:
+        if account.casefold() in folded_old:
+            current[account] = folded_old[account.casefold()]
+    old_baselines = state.get("target_baselines", {})
+    if not isinstance(old_baselines, dict):
+        old_baselines = {}
+    old_baselines[_target_key({"name": name, "conta": conta})] = {
+        "accounts": {
+            account.casefold(): _item_count(items, name)
+            for account, items in current.items()
+        }
+    }
+    state.update({"version": 1, "accounts": {**old_accounts, **current}, "target_baselines": old_baselines})
+    _write_json_atomic(state_file, state)
+
     data["targets"].append({"name": name, "conta": conta})
     _write_json_atomic(watch_file, data)
-    # Reset baselines for the new target so an item already owned is not reported as a new drop.
     return True
 
 
@@ -119,13 +149,16 @@ def remove_target(name: str, conta: str = "", watch_file: str = WATCH_FILE) -> b
     return True
 
 
-def acknowledge_hits(name: str = "", all_hits: bool = False, watch_file: str = WATCH_FILE) -> int:
+def acknowledge_hits(name: str = "", all_hits: bool = False, watch_file: str = WATCH_FILE,
+                     conta: str = "") -> int:
     data = _watch_data(watch_file)
     acknowledged = 0
     for hit in data["hits"]:
         if not isinstance(hit, dict) or hit.get("acknowledged"):
             continue
-        if all_hits or not name or str(hit.get("name") or "").casefold() == name.casefold():
+        if (all_hits or not name or str(hit.get("name") or "").casefold() == name.casefold()) and (not conta or str(hit.get("conta") or "").casefold() == conta.casefold()):
+            if conta and str(hit.get("conta") or "").casefold() != conta.casefold():
+                continue
             hit["acknowledged"] = True
             acknowledged += 1
     if acknowledged:
@@ -213,6 +246,28 @@ def _item_count(items: dict, name: str) -> int:
     return 0
 
 
+def _farm_window_title(targets: list[dict]) -> str:
+    if not targets:
+        return "TBH RUN - Alertas de farm (sem alvos)"
+    if len(targets) == 1:
+        target = targets[0]
+        account = target.get("conta") or "Todas as contas"
+        return f"TBH RUN - {target['name']} @ {account}"[:120]
+    names = ", ".join(target["name"] for target in targets[:2])
+    suffix = f" +{len(targets) - 2}" if len(targets) > 2 else ""
+    return f"TBH RUN - {len(targets)} alertas: {names}{suffix}"[:120]
+
+
+def _set_farm_window_title(targets: list[dict]) -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleTitleW(_farm_window_title(targets))
+    except Exception:
+        pass
+
+
 def _account_save_fingerprint(accounts: list[dict]) -> str:
     """Fingerprint da configuração de contas para detetar contas novas no vigia."""
     return json.dumps(sorted((a["name"].casefold(), os.path.normcase(a["save"])) for a in accounts), ensure_ascii=True)
@@ -277,6 +332,8 @@ def notify_drop(hit: dict) -> None:
             "Taskbar Hero — item de farm encontrado",
             0x00000040 | 0x00040000,
         )
+        # Clicar OK no popup confirma este alerta pendente na dashboard também.
+        acknowledge_hits(hit["name"], watch_file=WATCH_FILE, conta=hit["conta"])
     except Exception as exc:
         print(f"[FARM] Nao consegui mostrar o popup: {exc}", flush=True)
 
@@ -317,6 +374,17 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         if not isinstance(old_counts, dict):
             old_counts = {}
         old_counts = {str(name).casefold(): int(count or 0) for name, count in old_counts.items()}
+        if old_target_state is None:
+            # Legacy/manual targets fall back to the last global snapshot.
+            old_counts = {
+                account.casefold(): _item_count(items or {}, target["name"])
+                for account, items in previous_accounts.items()
+            }
+
+        # Add newly configured accounts to an all-accounts target without a false hit.
+        if not target.get("conta"):
+            for account_name, items in current.items():
+                old_counts.setdefault(account_name.casefold(), _item_count(items, target["name"]))
 
         if target.get("conta"):
             account = accounts_by_fold.get(target["conta"].casefold())
@@ -365,6 +433,7 @@ def watch(interval: float = 2.0) -> None:
             target_signature = tuple((t["name"], t.get("conta") or "") for t in targets)
             if target_signature != last_signature:
                 last_signature = target_signature
+                _set_farm_window_title(targets)
                 if targets:
                     print("[FARM] A vigiar: " + "; ".join(
                         t["name"] + (f" @ {t['conta']}" if t.get("conta") else " @ todas as contas")
@@ -372,7 +441,9 @@ def watch(interval: float = 2.0) -> None:
                     ), flush=True)
                 else:
                     print("[FARM] Sem alvos. Clica Farmar na dashboard para adicionar um item.", flush=True)
-            poll_once()
+            hits = poll_once()
+            if targets:
+                print(f"[FARM] {datetime.now().strftime('%H:%M:%S')} — {len(targets)} alvo(s), {len(load_accounts())} conta(s) verificadas.", flush=True)
         except KeyboardInterrupt:
             print("\n[FARM] Vigia parado.", flush=True)
             return

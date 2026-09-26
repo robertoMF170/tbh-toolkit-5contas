@@ -31,8 +31,8 @@ class TestAlertData(unittest.TestCase):
     def test_adiciona_remove_e_confirma_alvos_e_hits(self):
         with tempfile.TemporaryDirectory() as tmp:
             watch = os.path.join(tmp, "farm_watch.json")
-            self.assertTrue(alert.add_target("Shadow Bow", "Conta 1", watch))
-            self.assertFalse(alert.add_target("shadow bow", "conta 1", watch))
+            self.assertTrue(alert.add_target("Shadow Bow", "Conta 1", watch, state_file=os.path.join(tmp, "state.json"), accounts_file=os.path.join(tmp, "accounts.json")))
+            self.assertFalse(alert.add_target("shadow bow", "conta 1", watch, state_file=os.path.join(tmp, "state.json"), accounts_file=os.path.join(tmp, "accounts.json")))
             self.assertEqual(alert.load_targets(watch), [{"name": "Shadow Bow", "conta": "Conta 1"}])
             alert._record_hit({"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}, watch)
             self.assertEqual(alert.acknowledge_hits("Shadow Bow", watch_file=watch), 1)
@@ -40,6 +40,30 @@ class TestAlertData(unittest.TestCase):
             data = alert._read_json(watch, {})
             self.assertEqual(data["targets"], [])
             self.assertTrue(data["hits"][0]["acknowledged"])
+
+    def test_sem_alvos_ainda_atualiza_snapshot_para_nao_perder_drops_antes_do_clique(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 0})}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
+                alert.poll_once(state, watch, accounts, prices, FakeInventory())
+                self.assertEqual(alert._read_json(state, {})["accounts"]["Conta 1"]["Shadow Bow"], 0)
+                # Simula item recebido antes do clique em Farmar.
+                write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})}]})
+                alert.poll_once(state, watch, accounts, prices, FakeInventory())
+                # O alvo é criado depois do drop e deve usar o snapshot global como baseline.
+                alert.add_target("Shadow Bow", "Conta 1", watch, state_file=state, accounts_file=accounts, price_file=prices, inventory=FakeInventory())
+                notified = []
+                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append), [])
+                self.assertEqual(notified, [])
+                write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 2})}]})
+                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append)
+            self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}])
 
     def test_linha_de_base_nao_avisa_por_item_que_ja_tinha(self):
         with tempfile.TemporaryDirectory() as tmp:
