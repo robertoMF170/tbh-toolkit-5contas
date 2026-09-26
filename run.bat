@@ -36,8 +36,11 @@ echo   1) confirma os saves vs Steam Cloud ANTES de arrancar contas
 echo      - backup automatico + nao deixa sobrescrever a cloud com save velho
 echo   2) gera site completo: builds + baus + farm + mapa + UPAR JA
 echo      - ver mapa estilo jogo: bolas alinhadas, boss vermelho, bola pintada onde farmar
-echo   3) alertas de item a cada 2 segundos + popup quando houver drop
-echo   4) se existirem os modulos locais: sandboxes + ciclo baus 15 min
+echo   3) vigia os itens da dashboard a cada 2 segundos, sem pop-ups do browser
+echo      - pergunta se queres Discord; so avisa quando encontra um drop
+echo      - mostra um sinal de vida de 15 em 15 minutos, sem spam
+echo   4) dashboard local segura para registar itens sem autorizar Python no browser
+echo   5) se existirem os modulos locais: sandboxes + ciclo baus 15 min
 echo ============================================================
 echo.
 
@@ -150,16 +153,17 @@ if errorlevel 1 (
 echo.
 
 :sem_baus
-rem --- Alertas de farm: arrancam nesta janela e deixam heartbeat de saude ---
+rem --- Alertas de farm: o run pergunta pelo Discord antes de abrir a dashboard ---
 if not exist "%~dp0src\tbh_farm_alert.py" goto sem_farm_alert
 :iniciar_farm_alert
-echo [FARM] A arrancar vigia nesta janela; poll dos saves a cada 2 segundos.
-echo       Clica Farmar. Titulo = item/conta; popup, beep e Discord no drop.
-echo       Webhook e mencao opcionais: python -X utf8 src\tbh_farm_alert.py --discord-setup
+echo [FARM] A vigia consulta os saves de 2 em 2 segundos, sem linhas repetidas.
+echo       Os drops ficam na dashboard; o Discord e opcional e nao envia teste no arranque.
 if not exist "%~dp0var" mkdir "%~dp0var"
+python -X utf8 src\tbh_farm_alert.py --discord-prompt
+if errorlevel 1 echo [FARM] Nao foi possivel concluir a opcao Discord; a vigia local continua.
 python -X utf8 src\tbh_farm_alert.py --check-running >nul
 if not errorlevel 1 goto farm_already_running
-start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2
+start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2 --report-interval 900
 echo       A verificar arranque do processo...
 timeout /t 2 /nobreak >nul
 python -X utf8 src\tbh_farm_alert.py --status --interval 2
@@ -173,13 +177,13 @@ if errorlevel 4 goto farm_status_waiting
 if errorlevel 3 goto farm_status_starting
 if errorlevel 2 goto farm_status_warning
 if errorlevel 1 goto farm_status_inactive
-echo [FARM] OK — deixa esta janela aberta; verifica de 2 em 2s em segundo plano sem repetir linhas.
+echo [FARM] OK — consulta em segundo plano; resumo apenas quando muda algo ou a cada 15 minutos.
 goto farm_status_done
 :farm_status_waiting
-echo [FARM] ATIVO E A ESPERA DE ALVOS — clica Farmar na dashboard e confirma Abrir Python no browser.
+echo [FARM] ATIVO E A ESPERA DE ALVOS — clica Farmar na dashboard; nao aparece pedido para autorizar Python.
 goto farm_status_done
 :farm_status_starting
-echo [FARM] PROCESSO A ARRANCAR — verifica o estado com python -X utf8 src\tbh_farm_alert.py --status quando terminar.
+echo [FARM] PROCESSO A ARRANCAR — a primeira leitura dos saves esta em curso.
 goto farm_status_done
 :farm_status_warning
 echo [FARM] PROCESSO ATIVO, MAS COM ERROS — le a mensagem acima e confirma os saves/dados da conta.
@@ -207,26 +211,49 @@ echo [FARM] Alertas indisponiveis: falta src\tbh_farm_alert.py.
 echo.
 
 :farm_alert_done
-rem --- Servidor de visitas (estatisticas do painel #visitasPanel) ---
+rem --- Servidor local para abrir a dashboard e permitir alertas sem protocolo do browser ---
+if not exist "%~dp0src\tbh_visitas.py" goto dashboard_api_indisponivel
+set TBH_WEB_PORT=8765
+python -X utf8 src\tbh_visitas.py --check-api --port %TBH_WEB_PORT% --root "%~dp0" >nul 2>&1
+if not errorlevel 1 goto dashboard_api_pronta
 netstat -ano | findstr /C:":8765 " | findstr /C:"LISTENING" >nul 2>&1
-if errorlevel 1 (
-  if exist "%~dp0src\tbh_visitas.py" (
-    echo  A arrancar servidor de visitas em http://localhost:8765 ...
-    start "tbh-visitas" /min python -X utf8 "%~dp0src\tbh_visitas.py" --root "%~dp0" --db "%~dp0var\visitas.json"
-    timeout /t 1 /nobreak >nul
-  ) else (
-    echo  aviso: src\tbh_visitas.py ausente - painel de visitas sem dados ao vivo.
-  )
-) else (
-  echo  Servidor de visitas ja ativo na porta 8765 - nada a fazer.
-)
-echo.
+if errorlevel 1 goto dashboard_api_iniciar
+set TBH_WEB_PORT=8766
+python -X utf8 src\tbh_visitas.py --check-api --port %TBH_WEB_PORT% --root "%~dp0" >nul 2>&1
+if not errorlevel 1 goto dashboard_api_pronta
+netstat -ano | findstr /C:":8766 " | findstr /C:"LISTENING" >nul 2>&1
+if errorlevel 1 goto dashboard_api_iniciar
+echo  [ERRO] As portas locais 8765 e 8766 estao ocupadas por outros programas.
+goto dashboard_api_falhou
+
+:dashboard_api_iniciar
+echo  A arrancar dashboard local segura em http://127.0.0.1:%TBH_WEB_PORT%/ ...
+start "tbh-visitas" /min python -X utf8 "%~dp0src\tbh_visitas.py" --root "%~dp0" --db "%~dp0var\visitas.json" --port %TBH_WEB_PORT%
+timeout /t 2 /nobreak >nul
+python -X utf8 src\tbh_visitas.py --check-api --port %TBH_WEB_PORT% --root "%~dp0" >nul 2>&1
+if errorlevel 1 goto dashboard_api_falhou
+goto dashboard_api_pronta
+
+:dashboard_api_pronta
+echo  API local pronta; Farmar regista o item diretamente, sem permissoes do browser.
 if exist "%~dp0minhas_builds.html" (
   echo  A abrir dashboard no browser...
-  start "" "%~dp0minhas_builds.html"
+  start "" "http://127.0.0.1:%TBH_WEB_PORT%/"
 ) else (
   echo  ERRO: minhas_builds.html nao foi gerada! Verifica o erro acima.
 )
+goto dashboard_api_fim
+
+:dashboard_api_indisponivel
+echo  [AVISO] src\tbh_visitas.py ausente; a dashboard local nao pode registar itens ao vivo.
+goto dashboard_api_falhou
+
+:dashboard_api_falhou
+echo  [AVISO] API local indisponivel. A dashboard em ficheiro nao consegue guardar alvos.
+if exist "%~dp0minhas_builds.html" start "" "%~dp0minhas_builds.html"
+
+:dashboard_api_fim
+echo.
 echo.
 
 if not defined TEM_BAUS goto sem_monitor

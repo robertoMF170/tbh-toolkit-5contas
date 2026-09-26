@@ -558,22 +558,8 @@ def notify_drop(hit: dict) -> None:
     try:
         tbh_discord.send_alert(hit)
     except Exception as exc:
-        # Remote notification must never prevent the local sound/popup.
-        print(f"[FARM] Aviso Discord falhou ({type(exc).__name__}); alerta local continua ativo.", flush=True)
-    if os.name != "nt":
-        return
-    try:
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            message,
-            "Taskbar Hero — item de farm encontrado",
-            0x00000040 | 0x00040000,
-        )
-        # Clicar OK no popup confirma este alerta pendente na dashboard também.
-        acknowledge_hits(hit["name"], watch_file=WATCH_FILE, conta=hit["conta"])
-    except Exception as exc:
-        print(f"[FARM] Nao consegui mostrar o popup: {exc}", flush=True)
+        # A falha remota nunca impede a vigia; o drop continua visivel na dashboard.
+        print(f"[FARM] Aviso Discord falhou ({type(exc).__name__}); alerta continua guardado na dashboard.", flush=True)
 
 
 def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
@@ -766,6 +752,68 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
         time.sleep(max(0.1, interval - (time.monotonic() - started)))
 
 
+def _ask_yes_no(question: str) -> bool:
+    while True:
+        answer = input(question).strip().casefold()
+        if answer in {"s", "sim", "y", "yes"}:
+            return True
+        if answer in {"n", "nao", "não", "no"}:
+            return False
+        print("Resposta invalida. Escreve S para sim ou N para nao.", flush=True)
+
+
+def _print_discord_setup_instructions() -> None:
+    print("\n[Discord] Para receber alertas no canal que escolheres:", flush=True)
+    print("  1. Abre o canal no Discord e entra em Editar canal → Integracoes → Webhooks.", flush=True)
+    print("  2. Cria um webhook novo nesse canal e copia o URL.", flush=True)
+    print("  3. O URL e secreto: nao o publiques nem o envies em mensagens.", flush=True)
+    print("  4. Se quiseres mencionar uma pessoa, ativa o Modo Desenvolvedor e copia o ID numerico dela.", flush=True)
+    print("  5. O URL sera pedido oculto; o ID e opcional (Enter para nao mencionar).\n", flush=True)
+
+
+def _collect_discord_setup(show_instructions: bool = True) -> bool:
+    if show_instructions:
+        _print_discord_setup_instructions()
+    webhook_url = getpass.getpass("Webhook Discord novo (entrada oculta): ").strip()
+    mention_id = input("ID numerico do utilizador a mencionar (Enter para nao mencionar): ").strip()
+    try:
+        tbh_discord.save_discord_settings(webhook_url, mention_id)
+    except (OSError, ValueError) as exc:
+        print(f"Configuracao Discord nao guardada: {exc}", flush=True)
+        return False
+    print("Configuracao Discord guardada em .env sem mostrar o webhook.", flush=True)
+    return True
+
+
+def _discord_prompt() -> int:
+    print("\n[Discord] O envio so acontece quando a vigia encontrar um drop novo.", flush=True)
+    if not _ask_yes_no("Queres receber notificacoes no Discord? [S/N]: "):
+        tbh_discord.set_discord_enabled(False)
+        print("Discord desligado. A vigia local continua ativa.", flush=True)
+        return 0
+
+    webhook_url, mention_id = tbh_discord.discord_settings()
+    configured = (
+        tbh_discord.valid_webhook_url(webhook_url)
+        and (not mention_id or tbh_discord.valid_discord_user_id(mention_id))
+    )
+    if not configured:
+        print("Nao encontrei um webhook Discord valido neste computador.", flush=True)
+        _print_discord_setup_instructions()
+        if not _ask_yes_no("Queres configurar agora? [S/N]: "):
+            tbh_discord.set_discord_enabled(False)
+            print("Discord desligado. Podes configurar mais tarde; a vigia local continua ativa.", flush=True)
+            return 0
+        if not _collect_discord_setup(show_instructions=False):
+            tbh_discord.set_discord_enabled(False)
+            print("Discord desligado por agora; a vigia local continua ativa.", flush=True)
+            return 0
+
+    tbh_discord.set_discord_enabled(True)
+    print("Discord ativado. Nao sera enviada mensagem de teste; os avisos saem apenas quando houver drops.", flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Vigia os itens farmados e alerta quando aparecem nos saves.")
     parser.add_argument("--watch", action="store_true", help="vigia continuamente, consultando a cada 2 segundos")
@@ -776,6 +824,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", type=float, default=2.0, help="intervalo entre verificacoes (segundos)")
     parser.add_argument("--report-interval", type=float, default=900.0, help="intervalo entre resumos do vigia (segundos; predefinicao 15 minutos)")
     parser.add_argument("--discord-check", action="store_true", help="verifica se existe uma configuracao Discord valida sem revelar o webhook")
+    parser.add_argument("--discord-prompt", action="store_true", help="pergunta se queres ativar Discord e orienta a configuracao, sem enviar mensagens")
     parser.add_argument("--discord-enable", action="store_true", help="ativa as notificacoes Discord se houver um webhook valido")
     parser.add_argument("--discord-disable", action="store_true", help="desativa as notificacoes Discord locais")
     parser.add_argument("--add", metavar="ITEM", help="adiciona um item aos alertas")
@@ -784,6 +833,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ack", metavar="ITEM", nargs="?", const="", help="confirma alertas pendentes")
     parser.add_argument("--all", action="store_true", help="confirma todos os alertas pendentes")
     args = parser.parse_args(argv)
+    if args.discord_prompt:
+        return _discord_prompt()
     if args.check_running:
         running = _watch_process_running()
         print("VIGIA JA EM EXECUCAO." if running else "VIGIA NAO ESTA EM EXECUCAO.", flush=True)
