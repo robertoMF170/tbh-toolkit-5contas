@@ -829,6 +829,9 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     old_zone_statuses = old_state.get("zone_statuses", {})
     if not isinstance(old_zone_statuses, dict):
         old_zone_statuses = {}
+    old_zone_unreadable = old_state.get("zone_unreadable", [])
+    if not isinstance(old_zone_unreadable, list):
+        old_zone_unreadable = []
     active_zone_keys = set()
     for target in targets:
         requested_account = str(target.get("conta") or "").strip()
@@ -846,6 +849,10 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     next_zone_statuses = {
         key: value for key, value in old_zone_statuses.items()
         if key in active_zone_keys
+    }
+    next_zone_unreadable = {
+        str(name) for name in old_zone_unreadable
+        if str(name).casefold() in failed_accounts
     }
     zone_notifications = []
     zone_keys_seen = set()
@@ -865,13 +872,22 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             except Exception:
                 drop_stages = []
             for account in target_accounts:
-                if account["name"] in zone_snapshots:
+                account_fold = account["name"].casefold()
+                if account_fold in failed_accounts:
+                    if account_fold in next_zone_unreadable:
+                        continue
+                    zone = {}
+                    next_zone_unreadable.add(account["name"])
+                elif account["name"] in zone_snapshots:
                     zone = zone_snapshots[account["name"]]
+                    next_zone_unreadable.discard(account["name"])
                 elif callable(zone_reader):
                     try:
                         zone = zone_reader(account["save"]) or {}
                     except Exception:
                         zone = {}
+                    if zone:
+                        next_zone_unreadable.discard(account["name"])
                 else:
                     zone = {}
                 if not isinstance(zone, dict):
@@ -906,6 +922,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         "accounts": {**previous, **current},
         "target_baselines": next_baselines,
         "zone_statuses": next_zone_statuses,
+        "zone_unreadable": sorted(next_zone_unreadable),
     })
 
     for zone_alert in zone_notifications:

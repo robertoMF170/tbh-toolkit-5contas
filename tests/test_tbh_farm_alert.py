@@ -549,6 +549,7 @@ class TestFarmZoneValidation(unittest.TestCase):
             write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
             zone_alerts = []
             with (
+                mock.patch.object(alert.tbh_discord, "send_alert"),
                 mock.patch.object(alert, "_GAME_DATA_CACHE", None),
                 mock.patch.object(alert, "_GAME_DATA_OWNER", None),
                 mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
@@ -561,6 +562,7 @@ class TestFarmZoneValidation(unittest.TestCase):
                         notify_zone=zone_alerts.append,
                     )
             self.assertEqual([item["status"] for item in zone_alerts], ["verify"])
+            self.assertIn("zone_unreadable", alert._read_json(state, {}))
 
     def test_poll_notifica_status_inicial_e_so_repete_ao_mudar_classificacao(self):
         with tempfile.TemporaryDirectory() as tmp:
