@@ -103,9 +103,9 @@ def _release_watch_lock(fd: int) -> None:
         os.close(fd)
 
 
-def _watch_process_running(path: str = LOCK_FILE) -> bool:
+def _watch_process_running(path: str | None = None) -> bool:
     """Check the OS lock, so a stale heartbeat never claims a dead process is active."""
-    fd = _acquire_watch_lock(path)
+    fd = _acquire_watch_lock(path or LOCK_FILE)
     if fd is None:
         return True
     _release_watch_lock(fd)
@@ -667,6 +667,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Vigia os itens farmados e alerta quando aparecem nos saves.")
     parser.add_argument("--watch", action="store_true", help="vigia continuamente, consultando a cada 2 segundos")
     parser.add_argument("--status", action="store_true", help="mostra se o vigia de alertas está ativo")
+    parser.add_argument("--check-running", action="store_true", help="verifica o bloqueio do processo sem iniciar outra vigia")
     parser.add_argument("--interval", type=float, default=2.0, help="intervalo entre verificacoes (segundos)")
     parser.add_argument("--add", metavar="ITEM", help="adiciona um item aos alertas")
     parser.add_argument("--conta", default="", help="associa o alvo ou verifica esta conta (com --status/--add/--rm)")
@@ -674,6 +675,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ack", metavar="ITEM", nargs="?", const="", help="confirma alertas pendentes")
     parser.add_argument("--all", action="store_true", help="confirma todos os alertas pendentes")
     args = parser.parse_args(argv)
+    if args.check_running:
+        running = _watch_process_running()
+        print("VIGIA JA EM EXECUCAO." if running else "VIGIA NAO ESTA EM EXECUCAO.", flush=True)
+        return 0 if running else 1
     if args.add:
         changed = add_target(args.add, args.conta)
         print(("Alerta adicionado: " if changed else "Alerta ja registado: ") + args.add, flush=True)
@@ -689,6 +694,10 @@ def main(argv: list[str] | None = None) -> int:
         heartbeat = watcher_status(interval=args.interval)
         heartbeat["process_running"] = _watch_process_running()
         heartbeat["alive"] = heartbeat["alive"] and heartbeat["process_running"]
+        if heartbeat["process_running"] and not heartbeat["alive"]:
+            print(f"VIGIA PRESO OU SEM HEARTBEAT — o processo existe, mas nao atualiza ha {heartbeat['age_seconds']:.1f}s.")
+            print("Os alertas nao estao confirmados; verifica a janela do run.bat e os erros de leitura.")
+            return 2
         account_rows = heartbeat.get("accounts", [])
         status_accounts = [
             {"name": str(name).strip()}

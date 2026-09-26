@@ -120,6 +120,21 @@ class TestAlertData(unittest.TestCase):
         self.assertEqual(ativo["status"], "active")
         self.assertFalse(expirado["alive"])
 
+    def test_check_running_confirma_lock_sem_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = os.path.join(tmp, "watch.lock")
+            owner = alert._acquire_watch_lock(lock)
+            self.assertIsNotNone(owner)
+            try:
+                with mock.patch.object(alert, "LOCK_FILE", lock), mock.patch.object(alert, "HEARTBEAT_FILE", os.path.join(tmp, "no-heartbeat.json")):
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        result = alert.main(["--check-running"])
+                self.assertEqual(result, 0)
+                self.assertIn("VIGIA JA EM EXECUCAO", output.getvalue())
+            finally:
+                alert._release_watch_lock(owner)
+
     def test_lock_do_vigia_e_exclusivo_e_libertado(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock = os.path.join(tmp, "watch.lock")
