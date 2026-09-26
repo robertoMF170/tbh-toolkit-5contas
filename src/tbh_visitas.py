@@ -16,6 +16,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import tempfile
@@ -158,6 +159,44 @@ def _escrever_stats(dados: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ações locais do vigia de farm
+# ---------------------------------------------------------------------------
+def executar_acao_farm(pedido: dict) -> dict:
+    """Add/remove/ack farm targets from the locally served dashboard."""
+    if not isinstance(pedido, dict):
+        raise ValueError("Pedido invalido.")
+    action = str(pedido.get("action") or "").strip().lower()
+    name = str(pedido.get("name") or "").strip()
+    account = str(pedido.get("conta") or "").strip()
+    if action not in {"add", "remove", "ack"}:
+        raise ValueError("Acao de farm desconhecida.")
+    if not name or len(name) > 200 or len(account) > 120:
+        raise ValueError("Nome do item ou conta invalido.")
+
+    import tbh_farm_alert as farm_alert
+
+    if action == "add":
+        changed = farm_alert.add_target(name, account)
+        message = ("Alerta registado: " if changed else "Esse alerta ja estava registado: ") + name
+    elif action == "remove":
+        changed = farm_alert.remove_target(name, account)
+        message = ("Alerta removido: " if changed else "Esse alerta nao estava registado: ") + name
+    else:
+        changed = farm_alert.acknowledge_hits(name, conta=account) > 0
+        message = ("Alerta confirmado: " if changed else "Nao havia alerta pendente para: ") + name
+
+    watch_data = farm_alert._watch_data()
+    return {
+        "ok": True,
+        "changed": changed,
+        "action": action,
+        "message": message,
+        "targets": farm_alert.load_targets(),
+        "hits": watch_data["hits"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # servidor
 # ---------------------------------------------------------------------------
 class VisitasHandler(BaseHTTPRequestHandler):
@@ -235,8 +274,43 @@ class VisitasHandler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def _farm_request_is_local(self) -> bool:
+        try:
+            peer_is_local = ipaddress.ip_address(self.client_address[0]).is_loopback
+        except (ValueError, TypeError):
+            peer_is_local = False
+        port = int(self.server.server_address[1])
+        allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        allowed_origins = {f"http://{host}" for host in allowed_hosts}
+        return (
+            peer_is_local
+            and self.headers.get("Host", "").lower() in allowed_hosts
+            and self.headers.get("Origin", "") in allowed_origins
+        )
+
     def do_POST(self):  # noqa: N802
         rota = self.path.split("?", 1)[0]
+        if rota == "/api/farm":
+            if not self._farm_request_is_local():
+                self._json({"ok": False, "erro": "Acoes de farm so podem ser usadas pela dashboard local."}, 403)
+                return
+            if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
+                self._json({"ok": False, "erro": "O pedido tem de ser JSON."}, 415)
+                return
+            try:
+                tamanho = int(self.headers.get("Content-Length") or 0)
+                if tamanho <= 0 or tamanho > 8192:
+                    raise ValueError("Tamanho de pedido invalido.")
+                pedido = json.loads(self.rfile.read(tamanho).decode("utf-8"))
+                resultado = executar_acao_farm(pedido)
+            except (ValueError, UnicodeDecodeError) as exc:
+                self._json({"ok": False, "erro": str(exc) or "Pedido JSON invalido."}, 400)
+                return
+            except Exception:
+                self._json({"ok": False, "erro": "Nao foi possivel guardar a alteracao do vigia."}, 500)
+                return
+            self._json(resultado)
+            return
         if rota not in ("/api/visitas", "/api/visitas/"):
             self._json({"erro": "rota desconhecida"}, 404)
             return
@@ -264,9 +338,10 @@ class VisitasHandler(BaseHTTPRequestHandler):
             super().log_message(fmt, *args)
 
 
-def arrancar(porta: int, root: str, db: str, verbose: bool = False) -> ThreadingHTTPServer:
+def arrancar(porta: int, root: str, db: str, verbose: bool = False,
+             host: str = "127.0.0.1") -> ThreadingHTTPServer:
     _DB_PATH[0] = db
-    httpd = ThreadingHTTPServer(("0.0.0.0", porta), VisitasHandler)
+    httpd = ThreadingHTTPServer((host, porta), VisitasHandler)
     httpd.tbh_root = root
     httpd.tbh_verbose = verbose
     return httpd
@@ -277,6 +352,8 @@ def main(argv=None) -> int:
         description="Servidor local de estatisticas de visitas do site tbh.")
     parser.add_argument("--port", type=int, default=PORTA_BASE,
                         help="porta HTTP (predefinicao: %d)" % PORTA_BASE)
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="interface de rede; por defeito so aceita ligacoes deste computador")
     parser.add_argument("--root", default=ROOT,
                         help="pasta raiz com minhas_builds.html")
     parser.add_argument("--db", default=_db_padrao(),
@@ -286,7 +363,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     httpd = arrancar(args.port, os.path.abspath(args.root),
-                     os.path.abspath(args.db), args.verbose)
+                     os.path.abspath(args.db), args.verbose, args.host)
     print("[visitas] http://localhost:%d/  (db: %s)" % (args.port, args.db), flush=True)
     try:
         httpd.serve_forever()

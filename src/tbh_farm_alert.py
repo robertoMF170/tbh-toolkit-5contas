@@ -673,10 +673,12 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     return hits
 
 
-def watch(interval: float = 2.0) -> None:
+def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
     interval = max(0.5, min(interval, 60.0))
+    report_interval = max(1.0, min(report_interval, 86400.0))
     print(f"[FARM] Vigia iniciado: consulta saves a cada {interval:g}s. Deixa o run.bat aberto.", flush=True)
     last_signature = None
+    last_report = time.monotonic()
     while True:
         started = time.monotonic()
         try:
@@ -691,6 +693,7 @@ def watch(interval: float = 2.0) -> None:
                     _print_watch_summary(targets, configured_accounts)
                 else:
                     print("[FARM] Sem alvos. Clica Farmar na dashboard para adicionar um item.", flush=True)
+                last_report = time.monotonic()
 
             # Sinaliza o arranque antes do primeiro scan, para o .bat confirmar que o
             # processo existe mesmo quando ainda nao ha alvos ou saves acessiveis.
@@ -715,6 +718,22 @@ def watch(interval: float = 2.0) -> None:
                 else:
                     status = "active"
                 _write_heartbeat(targets, configured_accounts, interval, status=status, watched_accounts=watched_accounts)
+                now = time.monotonic()
+                if now - last_report >= report_interval:
+                    good = max(0, len(watched_accounts) - unreadable)
+                    webhook_url, _mention_id = tbh_discord.discord_settings()
+                    discord_on = (
+                        os.environ.get("TBH_DISCORD_ENABLED", "").strip() != "0"
+                        and tbh_discord.valid_webhook_url(webhook_url)
+                    )
+                    discord_label = "ativo" if discord_on else "desativado"
+                    print(
+                        f"[FARM] Continua a vigiar: {len(targets)} alvo(s); "
+                        f"saves legiveis {good}/{len(watched_accounts)}; Discord {discord_label}. "
+                        f"Verifica de {interval:g} em {interval:g} segundos.",
+                        flush=True,
+                    )
+                    last_report = now
             else:
                 _LAST_SCAN_ERRORS.clear()
                 status = "waiting_for_targets" if configured_accounts else "no_accounts"
@@ -740,6 +759,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--discord-setup", action="store_true", help="guarda o webhook e o ID opcional do utilizador num .env local")
     parser.add_argument("--test-discord", action="store_true", help="envia uma mensagem de teste para o webhook configurado")
     parser.add_argument("--interval", type=float, default=2.0, help="intervalo entre verificacoes (segundos)")
+    parser.add_argument("--report-interval", type=float, default=900.0, help="intervalo entre resumos do vigia (segundos; predefinicao 15 minutos)")
+    parser.add_argument("--discord-check", action="store_true", help="verifica se existe uma configuracao Discord valida sem revelar o webhook")
     parser.add_argument("--add", metavar="ITEM", help="adiciona um item aos alertas")
     parser.add_argument("--conta", default="", help="associa o alvo ou verifica esta conta (com --status/--add/--rm)")
     parser.add_argument("--rm", metavar="ITEM", help="remove um item dos alertas")
@@ -750,8 +771,22 @@ def main(argv: list[str] | None = None) -> int:
         running = _watch_process_running()
         print("VIGIA JA EM EXECUCAO." if running else "VIGIA NAO ESTA EM EXECUCAO.", flush=True)
         return 0 if running else 1
+    if args.discord_check:
+        webhook_url, mention_id = tbh_discord.discord_settings()
+        if not webhook_url or not tbh_discord.valid_webhook_url(webhook_url):
+            print("Discord ainda nao esta configurado com um webhook valido.", flush=True)
+            return 1
+        if mention_id and not tbh_discord.valid_discord_user_id(mention_id):
+            print("O webhook existe, mas o ID de mencao configurado e invalido.", flush=True)
+            return 1
+        print("Discord configurado; o webhook nao foi mostrado.", flush=True)
+        return 0
     if args.discord_setup:
-        webhook_url = getpass.getpass("Webhook Discord novo (entrada oculta; nao reutilizes o que foi exposto): ").strip()
+        print("\n[Discord] Antes de continuar, cria um webhook no canal onde queres os alertas:", flush=True)
+        print("  1. Discord → abre o canal → Editar canal → Integracoes → Webhooks.", flush=True)
+        print("  2. Cria um webhook e copia o URL. Trata-o como palavra-passe; nao o partilhes.\n", flush=True)
+        print("O URL sera pedido em modo oculto. O ID numerico de mencao e opcional (Enter para nao mencionar).", flush=True)
+        webhook_url = getpass.getpass("Webhook Discord (entrada oculta): ").strip()
         mention_id = input("ID numerico do utilizador robs (Enter para nao mencionar): ").strip()
         try:
             tbh_discord.save_discord_settings(webhook_url, mention_id)
@@ -880,7 +915,10 @@ def main(argv: list[str] | None = None) -> int:
                 pass
             except OSError as exc:
                 print(f"[FARM] Nao consegui limpar heartbeat antigo: {exc}", flush=True)
-            watch(max(0.5, min(args.interval, 60.0)))
+            watch(
+                max(0.5, min(args.interval, 60.0)),
+                max(1.0, min(args.report_interval, 86400.0)),
+            )
         finally:
             _release_watch_lock(lock_fd)
         return 0

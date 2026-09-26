@@ -17,8 +17,39 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENV_FILE = os.path.join(ROOT, ".env")
 WEBHOOK_ENV = "TBH_DISCORD_WEBHOOK_URL"
 MENTION_ENV = "TBH_DISCORD_MENTION_ID"
+ENABLED_FILE = os.path.join(ROOT, "var", "farm_discord_enabled")
 REQUEST_TIMEOUT_SECONDS = 8
 MAX_ATTEMPTS = 3
+
+
+def discord_enabled(enabled_file: str = ENABLED_FILE) -> bool:
+    """Read the local opt-in; preserve legacy/manual setup when no choice is saved."""
+    try:
+        with open(enabled_file, encoding="utf-8") as fh:
+            return fh.read().strip().casefold() not in {"0", "false", "no", "nao", "não", "off"}
+    except OSError:
+        return True
+
+
+def set_discord_enabled(enabled: bool, enabled_file: str = ENABLED_FILE) -> None:
+    """Persist whether this installation has opted into farm notifications."""
+    directory = os.path.dirname(os.path.abspath(enabled_file))
+    os.makedirs(directory, exist_ok=True)
+    temp_path = f"{enabled_file}.{os.getpid()}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("1\n" if enabled else "0\n")
+        os.replace(temp_path, enabled_file)
+    finally:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
+    try:
+        os.chmod(enabled_file, 0o600)
+    except OSError:
+        pass
 
 
 def _read_setting(name: str, env_file: str = ENV_FILE) -> str:
@@ -180,6 +211,8 @@ def send_alert(hit: dict, *, webhook_url: str | None = None,
                mention_id: str | None = None, transport=None,
                test: bool = False, sleep=None) -> bool:
     """Send once; retry only explicit 429 responses, never ambiguous POST failures."""
+    if not discord_enabled():
+        return False
     configured_url, configured_user = discord_settings()
     url = configured_url if webhook_url is None else str(webhook_url).strip()
     user_id = configured_user if mention_id is None else str(mention_id).strip()
