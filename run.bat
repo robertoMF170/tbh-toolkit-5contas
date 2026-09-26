@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title TBH — RUN (site completo + extras locais)
+title TBH — RUN + ALERTAS FARM (2s)
 cd /d "%~dp0"
 setlocal
 
@@ -21,7 +21,7 @@ echo   sem args  - modo normal: confirma os saves vs Steam Cloud, gera o site
 echo               e (se existirem os modulos locais) faz login e inicia o ciclo
 echo   --forcar  - forca arranque de TODAS as sandboxes mesmo que parecam
 echo               a correr (so se src\abrir_steam.py existir)
-echo   run.bat e o UNICO arranque - legados em scripts/ chamam este
+echo   run.bat e o UNICO arranque - inclui alertas de drop em tempo real
 exit /b 0
 
 :inicio
@@ -36,8 +36,8 @@ echo   1) confirma os saves vs Steam Cloud ANTES de arrancar contas
 echo      - backup automatico + nao deixa sobrescrever a cloud com save velho
 echo   2) gera site completo: builds + baus + farm + mapa + UPAR JA
 echo      - ver mapa estilo jogo: bolas alinhadas, boss vermelho, bola pintada onde farmar
-echo   3) se existirem os modulos locais: sandboxes + ciclo farm 15 min
-echo      - modulos ausentes sao saltados automaticamente (versao publica)
+echo   3) alertas de item a cada 2 segundos + popup quando houver drop
+echo   4) se existirem os modulos locais: sandboxes + ciclo baus 15 min
 echo ============================================================
 echo.
 
@@ -150,6 +150,25 @@ if errorlevel 1 (
 echo.
 
 :sem_baus
+rem --- Alertas de farm: ficam nesta janela principal, sem abrir outro .bat ---
+if not exist "%~dp0src\tbh_farm_alert.py" goto sem_farm_alert
+if exist "%~dp0config\baus.json" goto iniciar_farm_alert
+if exist "%~dp0baus.json" goto iniciar_farm_alert
+goto sem_farm_alert
+
+:iniciar_farm_alert
+echo [FARM] A iniciar alertas nesta janela — saves verificados de 2 em 2 segundos.
+echo       Clica Farmar na dashboard; popup identifica item e conta quando aparecer.
+start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2
+if errorlevel 1 echo       AVISO: o processo de alertas nao arrancou; confirma se o Python esta instalado.
+echo.
+goto farm_alert_done
+
+:sem_farm_alert
+echo [FARM] Alertas indisponiveis: falta src\tbh_farm_alert.py ou config\baus.json.
+echo.
+
+:farm_alert_done
 rem --- Servidor de visitas (estatisticas do painel #visitasPanel) ---
 netstat -ano | findstr /C:":8765 " | findstr /C:"LISTENING" >nul 2>&1
 if errorlevel 1 (
@@ -176,6 +195,7 @@ if not defined TEM_BAUS goto sem_monitor
 echo [5/5] A iniciar CICLO ESTAVEL 15 min
 echo       leve a cada 2 min (saves locais - baus/progresso/UPAR JA/inventario)
 echo       completo a cada 15 min (regenera builds SKILLS/RUNAS sincronizadas)
+echo       alertas de drop correm nesta janela em paralelo, a cada 2 segundos
 echo       log: var\baus_monitor.log  - deixa esta janela ABERTA durante o farm
 echo       Para parar de vez: fecha esta janela
 echo ============================================================
@@ -193,8 +213,9 @@ echo A reiniciar ciclo...
 goto loop
 
 :sem_monitor
-echo [5/5] Modulo de baus/farm ausente (versao publica) — monitor SALTADO.
-echo       O site foi gerado e aberto no browser. Podes fechar esta janela.
+echo [5/5] Modulo local de baus ausente — ciclo de baus SALTADO.
+echo       O alerta de farm (se disponivel) continua nesta janela em background.
+echo       Fecha esta janela para parar o ciclo e os alertas.
 echo ============================================================
 
 :fim

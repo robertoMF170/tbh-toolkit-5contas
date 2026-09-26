@@ -10,44 +10,11 @@ ROOT = os.path.dirname(BASE)
 VALID = re.compile(r"^https?://(www\.)?tbhindex\.com/(pt/)?builds/\d+/?$", re.I)
 
 
-def _titulo_farm(conta: str = "") -> str:
-    """Gera um título de consola seguro e identificável para a conta."""
-    nome_conta = re.sub(r"[^\w ().-]", "_", (conta or "Todas as contas").strip())[:60]
-    return "TBH FARM - " + (nome_conta or "Todas as contas")
-
-
-def _abrir_run_farm(conta: str = "") -> bool:
-    """Abre o vigia numa consola visível, com a conta identificada no título."""
-    bat = os.path.join(ROOT, "run_farm.bat")
-    if os.name != "nt" or not os.path.isfile(bat):
-        return False
-
-    titulo = _titulo_farm(conta)
-    env = os.environ.copy()
-    env["TBH_FARM_CONTA"] = conta
-    env["TBH_FARM_TITULO"] = titulo
-    try:
-        subprocess.Popen(
-            ["cmd.exe", "/K", f"title {titulo} & call {os.path.basename(bat)}"],
-            cwd=ROOT,
-            env=env,
-            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-        )
-        return True
-    except OSError as exc:
-        print("AVISO: nao consegui abrir run_farm.bat: " + str(exc))
-        return False
-
-
 def _handle_farm(raw: str):
     from urllib.parse import parse_qs
-    if not os.path.exists(os.path.join(BASE, "tbh_farm_watch.py")):
-        # versao publica: vigia de farm nao incluido — apenas informa e sai limpo
-        print("O vigia de farm (tbh_farm_watch.py) nao faz parte desta versao publica.")
-        print("Disponiveis: tbh://add?url=... e tbh://rm?url=... (builds do tbhindex.com).")
-        return True
     try:
-        # tbh://farm?add=Nome+ou+tbh://farm?rm=Nome ou tbh://farm?ack=Nome
+        import tbh_farm_alert as farm_alert
+        # tbh://farm?add=Nome ou tbh://farm?rm=Nome ou tbh://farm?ack=Nome
         q = raw.split("?", 1)[1] if "?" in raw else ""
         qs = parse_qs(q)
         # parse_qs already decodes, but also handle unquote for single values
@@ -57,19 +24,11 @@ def _handle_farm(raw: str):
             return unquote(v[0])
 
         def adicionar(nome, conta_farm=""):
-            print(f"A marcar para farmar: {nome}" + (f" @ {conta_farm}" if conta_farm else " @ auto (deteta sozinho qual conta droppou)"))
-            cmd = [sys.executable, os.path.join(BASE, "tbh_farm_watch.py"), "--add", nome]
-            if conta_farm:
-                cmd += ["--conta", conta_farm]
-            r = subprocess.run(cmd, cwd=ROOT if os.path.isdir(os.path.join(ROOT, "config")) else BASE)
-            if r.returncode != 0:
-                print("ERRO ao marcar: " + str(r.returncode))
-                return
-            # Abre a janela visível depois de guardar o alvo, para o .bat já o encontrar.
-            if _abrir_run_farm(conta_farm):
-                print(f"OK marcado! run_farm.bat aberto numa janela dedicada: {_titulo_farm(conta_farm)}.")
+            if farm_alert.add_target(nome, conta_farm):
+                destino = f" @ {conta_farm}" if conta_farm else " @ todas as contas"
+                print(f"OK — alerta registado: {nome}{destino}. O run.bat verifica os saves a cada 2s.")
             else:
-                print("OK marcado, mas nao consegui abrir run_farm.bat. Abre-o manualmente para ver o vigia.")
+                print(f"Este alvo ja esta registado: {nome}.")
 
         add = one("add")
         rm = one("rm")
@@ -81,17 +40,16 @@ def _handle_farm(raw: str):
             adicionar(add, conta)
             return True
         if rm:
-            print(f"A remover farm: {rm}")
-            r = subprocess.run([sys.executable, os.path.join(BASE, "tbh_farm_watch.py"), "--rm", rm] + (["--conta", conta] if conta else []), cwd=ROOT if os.path.isdir(os.path.join(ROOT, "config")) else BASE)
+            removed = farm_alert.remove_target(rm, conta)
+            print(f"Alvo removido: {rm}." if removed else f"Alvo nao encontrado: {rm}.")
             return True
         if ack or "ack-all" in q.lower() or "ack_all" in q.lower():
             nome = ack or ""
-            if "ack-all" in q.lower() or "ack_all" in q.lower():
-                print("A confirmar todos hits...")
-                r = subprocess.run([sys.executable, os.path.join(BASE, "tbh_farm_watch.py"), "--ack", "--all"], cwd=ROOT if os.path.isdir(os.path.join(ROOT, "config")) else BASE)
-            else:
-                print(f"A confirmar hit: {nome}")
-                r = subprocess.run([sys.executable, os.path.join(BASE, "tbh_farm_watch.py"), "--ack", nome] if nome else [sys.executable, os.path.join(BASE, "tbh_farm_watch.py"), "--ack"], cwd=ROOT if os.path.isdir(os.path.join(ROOT, "config")) else BASE)
+            count = farm_alert.acknowledge_hits(
+                nome,
+                all_hits=("ack-all" in q.lower() or "ack_all" in q.lower() or not nome),
+            )
+            print(f"{count} alerta(s) confirmado(s).")
             return True
         # if no known param, treat raw path as add (+ conta se vier na query)
         # e.g. tbh://farm/Eclipse Amulet (Cosmic) A  ou  tbh://farm/Void Crystal?conta=Conta 1

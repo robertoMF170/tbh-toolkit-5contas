@@ -1,0 +1,145 @@
+import json
+import os
+import sys
+import tempfile
+import unittest
+from collections import Counter
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import tbh_farm_alert as alert
+
+
+class FakeInventory:
+    def carregar_dados_jogo(self):
+        return {"gear": {}, "nomes": {}}
+
+    def itens_da_conta_detalhado(self, save_path, game_data, market_names):
+        if save_path == "broken":
+            raise OSError("save temporariamente bloqueado")
+        items = json.loads(save_path)
+        return Counter(items), Counter()
+
+
+def write_json(path, value):
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(value, fh)
+
+
+class TestAlertData(unittest.TestCase):
+    def test_adiciona_remove_e_confirma_alvos_e_hits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "farm_watch.json")
+            self.assertTrue(alert.add_target("Shadow Bow", "Conta 1", watch))
+            self.assertFalse(alert.add_target("shadow bow", "conta 1", watch))
+            self.assertEqual(alert.load_targets(watch), [{"name": "Shadow Bow", "conta": "Conta 1"}])
+            alert._record_hit({"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}, watch)
+            self.assertEqual(alert.acknowledge_hits("Shadow Bow", watch_file=watch), 1)
+            self.assertTrue(alert.remove_target("Shadow Bow", "Conta 1", watch))
+            data = alert._read_json(watch, {})
+            self.assertEqual(data["targets"], [])
+            self.assertTrue(data["hits"][0]["acknowledged"])
+
+    def test_linha_de_base_nao_avisa_por_item_que_ja_tinha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": "Conta 1"}], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 4})}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
+                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm")), [])
+                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm")), [])
+
+    def test_avisa_um_novo_drop_e_nao_repete_depois(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": "Conta 1"}], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 0})}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
+                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})}]})
+                notified = []
+                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), notified.append)
+                self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}])
+                self.assertEqual(notified, hits)
+                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("duplicate alarm")), [])
+            data = alert._read_json(watch, {})
+            self.assertEqual(len(data["hits"]), 1)
+            self.assertEqual(data["hits"][0]["conta"], "Conta 1")
+
+    def test_sem_conta_deteccao_auto_encontra_a_conta_certa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": ""}], "hits": []})
+            write_json(accounts, {"contas": [
+                {"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 0})},
+                {"nome": "Conta 2", "save": json.dumps({"Shadow Bow": 8})},
+            ]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
+                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                write_json(accounts, {"contas": [
+                    {"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 0})},
+                    {"nome": "Conta 2", "save": json.dumps({"Shadow Bow": 9})},
+                ]})
+                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: None)
+            self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 2", "qtd": 1}])
+
+    def test_save_com_falha_preserva_ultima_leitura_sem_alarme(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": "Conta 1"}], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 2})}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
+                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                write_json(accounts, {"contas": [{"nome": "Conta 1", "save": "broken"}]})
+                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm")), [])
+            self.assertEqual(alert._read_json(state, {})["accounts"]["Conta 1"]["Shadow Bow"], 2)
+
+    def test_nova_conta_tem_linha_de_base_sem_alerta_falso(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": ""}], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            with mock.patch.object(alert, "_GAME_DATA_CACHE", None):
+                alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("false alarm"))
+                write_json(accounts, {"contas": [
+                    {"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})},
+                    {"nome": "Conta 2", "save": json.dumps({"Shadow Bow": 5})},
+                ]})
+                self.assertEqual(alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: self.fail("new account false alarm")), [])
+                write_json(accounts, {"contas": [
+                    {"nome": "Conta 1", "save": json.dumps({"Shadow Bow": 1})},
+                    {"nome": "Conta 2", "save": json.dumps({"Shadow Bow": 6})},
+                ]})
+                hits = alert.poll_once(state, watch, accounts, prices, FakeInventory(), lambda hit: None)
+            self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 2", "qtd": 1}])
+
+    def test_find_new_drops_respeita_a_conta_do_alvo(self):
+        previous = {"Conta 1": {"Shadow Bow": 1}, "Conta 2": {"Shadow Bow": 1}}
+        current = {"Conta 1": {"Shadow Bow": 1}, "Conta 2": {"Shadow Bow": 2}}
+        targets = [{"name": "Shadow Bow", "conta": "Conta 1"}]
+        self.assertEqual(alert.find_new_drops(previous, current, targets), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

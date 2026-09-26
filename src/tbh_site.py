@@ -1310,8 +1310,8 @@ window.farmToggle=function(btn){
   var on = btn.classList.contains('on');
   var action = on ? 'rm' : 'add';
   var url = 'tbh://farm?'+action+'='+encodeURIComponent(name) + (conta ? '&conta='+encodeURIComponent(conta) : '');
-  var cmd = 'python src\\tbh_farm_watch.py --'+action+' "'+name.replace(/"/g,'')+'"' + (conta ? ' --conta "'+conta.replace(/"/g,'')+'"' : '');
-  // o protocolo grava/remove o alvo e, ao adicionar, abre run_farm.bat numa janela dedicada.
+  var cmd = 'python src\\tbh_farm_alert.py --'+action+' "'+name.replace(/"/g,'')+'"' + (conta ? ' --conta "'+conta.replace(/"/g,'')+'"' : '');
+  // O protocolo só regista/remove o alvo; o vigia contínuo corre no run.bat principal.
   try{ location.href=url; }catch(e){}
   // feedback visual imediato (optimistic)
   if(on){
@@ -1322,10 +1322,10 @@ window.farmToggle=function(btn){
   } else {
     btn.classList.add('on'); btn.textContent='✅ Farmando'; btn.title='Ja a farmar — clica para parar' + (conta?' @ '+conta:'');
     var msgConta = conta ? ('Conta: '+conta+' — vigia só essa.') : 'A vigiar TODAS — deteta sozinho qual conta droppou.';
-    toast('A abrir run_farm.bat para: '+name+'\n'+msgConta+' O título da janela identifica a conta; deixa-a aberta.', conta ? ('run_farm.bat — '+conta+' + 🔔') : 'run_farm.bat — todas as contas + 🔔');
+    toast('Alerta registado: '+name+'\n'+msgConta+' O run.bat verifica os saves a cada 2s; deixa-o aberto.', conta ? ('run.bat — '+conta+' + 🔔') : 'run.bat — todas as contas + 🔔');
     // optimistic: marca todos botões com mesmo nome (várias tabs, FARM POSSÍVEL + FARM OP)
     document.querySelectorAll('.ffarmbtn[data-farm="'+name.replace(/"/g,'\\"')+'"]').forEach(function(b){ b.classList.add('on'); b.textContent='✅ Farmando'; });
-    if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_watch.py --add "'+name+'"'+(conta?' --conta "'+conta+'"':'')).catch(()=>{});
+    if(navigator.clipboard) navigator.clipboard.writeText('python src/tbh_farm_alert.py --add "'+name+'"'+(conta?' --conta "'+conta+'"':'')).catch(()=>{});
   }
   copyText(cmd).catch(()=>{});
   setTimeout(refreshFarmWatchBar, 900);
@@ -1392,7 +1392,7 @@ function renderFarmWatchBar(w){
   if(!bar||!w) return;
   var t=w.targets||[], h=(w.hits||[]).filter(x=>!x.acknowledged);
   if(!t.length && !h.length){ bar.classList.remove('show'); bar.innerHTML=''; return; }
-  var html='<h4>🎯 FARM WATCH — <span style="color:#7ee787">'+t.length+' alvo(s)</span> · vigia a cada 2s <span style="color:#a89878;font-weight:600">(run_farm.bat abre ao clicares “Farmar” · título = conta)</span> <button onclick="location.reload()" style="background:#241f18;color:#ffd86b;border:1px solid #7a6848;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;margin-left:8px;">↻ actualizar</button></h4>';
+  var html='<h4>🎯 FARM WATCH — <span style="color:#7ee787">'+t.length+' alvo(s)</span> · verifica de 2 em 2s no run.bat <button onclick="location.reload()" style="background:#241f18;color:#ffd86b;border:1px solid #7a6848;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;margin-left:8px;">↻ actualizar</button></h4>';
   if(t.length){
     html+='<div class="fw-tags">';
     t.forEach(function(x){
@@ -1402,7 +1402,7 @@ function renderFarmWatchBar(w){
       html+='<span class="fw-tag" title="'+tip.replace(/"/g,'&quot;')+'"><b>'+n.replace(/</g,'&lt;')+'</b><span style="color:#a89878">'+c.replace(/</g,'&lt;')+'</span> <button onclick="location.href=\'tbh://farm?rm='+encodeURIComponent(n)+'\'">✕ parar</button></span>';
     });
     html+='</div>';
-    html+='<div style="margin-top:6px;font-size:11px;color:#a89878;">Alvos em <code>var/farm_watch.json</code> — <code>run_farm.bat</code> abre automaticamente ao clicares “Farmar”, com a conta no título (vigia a cada 2s + <span style="color:#ff9d9d">🔔 alarme até OK</span>).</div>';
+    html+='<div style="margin-top:6px;font-size:11px;color:#a89878;">Alvos em <code>var/farm_watch.json</code> — o <code>run.bat</code> lê os saves de 2 em 2 segundos e mostra popup quando encontrar o item (<span style="color:#ff9d9d">🔔 até confirmares OK</span>).</div>';
   }
   if(h.length){
     h.slice(-3).forEach(function(hit){
@@ -1842,7 +1842,7 @@ def main() -> None:
     <div class="sub">Clica numa build para ver a arvore de skills (ordem na coluna direita) e o mapa de runas com o caminho perfeito desta build.</div>
     <div id="farmbar"><span id="farmdot" class="dot"></span><b style="font-size:12px;color:#ffd86b;">FARM EM CICLO</b><small id="farmtxt">a atualizar sozinho a cada 15 min — deixa o farm a correr</small><span id="farmwarn" class="farmwarn">⚠ FARM PARADO — reabre atualizar_baus_agora.bat</span><span style="flex:1"></span><button id="farmtoggle" type="button">⏸ pausar</button></div>
     <div id="farmWatchBar"></div>
-    <div id="farmRunHint" style="font-size:11px;color:#a89878;margin:6px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><span>Queres ser avisado quando dropar?</span> <span style="background:#1d1913;border:1px solid #5a4e38;border-radius:6px;padding:2px 8px;">1) Clica <b style="color:#ffd86b">🎯 Farmar</b> no item → <small style="color:#a89878">abre run_farm.bat (título = conta)</small></span> <span style="background:#1d1913;border:1px solid #5a4e38;border-radius:6px;padding:2px 8px;">2) Deixa a farmar · vigia <b style="color:#7ee787">2s</b> + <b style="color:#ff9d9d">🔔 alarme até OK</b> <small style="color:#a89878">· deixa a janela do farm aberta</small></span></div>
+    <div id="farmRunHint" style="font-size:11px;color:#a89878;margin:6px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><span>Queres ser avisado quando dropar?</span> <span style="background:#1d1913;border:1px solid #5a4e38;border-radius:6px;padding:2px 8px;">1) Clica <b style="color:#ffd86b">🎯 Farmar</b> no item → <small style="color:#a89878">regista o item no alerta do run.bat</small></span> <span style="background:#1d1913;border:1px solid #5a4e38;border-radius:6px;padding:2px 8px;">2) Mantém o <b style="color:#ffd86b">run.bat aberto</b> · verifica os saves a cada <b style="color:#7ee787">2s</b> e mostra popup quando encontrar o item.</span></div>
     __BAUS__
     __FARMOP__
     <div class="cards">__CARDS__</div>
