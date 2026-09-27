@@ -645,7 +645,7 @@ def _print_watch_summary(targets: list[dict], accounts: list[dict],
         )
         total_quantity += count["qtd"]
         total_alerts += count["alertas"]
-    if not targets:
+    if not active_count:
         print("[FARM] Sem alvos ativos.", flush=True)
     total_unit_word = "unidade" if total_quantity == 1 else "unidades"
     total_alert_word = "alerta" if total_alerts == 1 else "alertas"
@@ -1014,7 +1014,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                 if status_key in zone_keys_seen:
                     continue
                 zone_keys_seen.add(status_key)
-                if old_zone_statuses.get(status_key) == signature:
+                if old_zone_statuses.get(status_key) == signature or _target_key(target) in pending_baselines:
                     continue
                 zone_notifications.append({
                     "type": "zone_status",
@@ -1038,6 +1038,22 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         _clear_baseline_pending(watch_file, baselines_ready_to_clear)
     except (OSError, ValueError) as exc:
         print(f"[FARM] Nao consegui guardar a nova linha de base de um alvo retomado ({type(exc).__name__}); vou tentar novamente.", flush=True)
+
+    # A pause can arrive while this scan is running. Recheck persisted state
+    # before sending so an in-flight scan cannot emit an alert after the click.
+    latest_targets = load_targets(watch_file)
+    latest_pending = _target_pending_baselines(watch_file)
+
+    def target_still_watched(event: dict) -> bool:
+        return any(
+            not target.get("paused")
+            and _target_key(target) not in latest_pending
+            and _hit_matches_target(event, target, all_accounts)
+            for target in latest_targets
+        )
+
+    hits = [hit for hit in hits if target_still_watched(hit)]
+    zone_notifications = [alert for alert in zone_notifications if target_still_watched(alert)]
 
     for zone_alert in zone_notifications:
         notify_zone(zone_alert)
@@ -1204,6 +1220,8 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
                 unresolved = any(target.get("conta") and not resolve_account_name(target["conta"], configured_accounts) for target in active_targets)
                 if not configured_accounts:
                     status = "no_accounts"
+                elif not active_targets:
+                    status = "paused"
                 elif unresolved or not watched_accounts:
                     status = "account_not_found"
                 elif unreadable == len(watched_accounts):

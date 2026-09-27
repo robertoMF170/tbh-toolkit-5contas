@@ -24,6 +24,15 @@ class FakeInventory:
         return Counter(items), Counter()
 
 
+class TrackingFakeInventory(FakeInventory):
+    def __init__(self):
+        self.reads = []
+
+    def itens_da_conta_detalhado(self, save_path, game_data, market_names):
+        self.reads.append(save_path)
+        return super().itens_da_conta_detalhado(save_path, game_data, market_names)
+
+
 def write_json(path, value):
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(value, fh)
@@ -391,6 +400,165 @@ class TestAlertData(FarmAlertTestCase):
             data = alert._read_json(watch, {})
             self.assertEqual(data["targets"], [])
             self.assertTrue(data["hits"][0]["acknowledged"])
+
+    def test_pausar_mantem_alvo_e_historico_e_retomar_marca_nova_linha_de_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            old_hit = {"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1, "acknowledged": False}
+            write_json(watch, {"targets": [{"name": "Shadow Bow", "conta": "Conta 1"}], "hits": [old_hit]})
+
+            self.assertTrue(alert.set_target_paused("Shadow Bow", "Conta 1", True, watch))
+            self.assertEqual(alert.load_targets(watch), [{"name": "Shadow Bow", "conta": "Conta 1", "paused": True}])
+            self.assertFalse(alert.add_target("Shadow Bow", "Conta 1", watch))
+            self.assertTrue(alert.set_target_paused("Shadow Bow", "Conta 1", False, watch))
+
+            raw = alert._read_json(watch, {})
+            self.assertTrue(raw["targets"][0]["baseline_pending"])
+            self.assertEqual(raw["hits"], [old_hit])
+            self.assertFalse(alert.set_target_paused("Shadow Bow", "Conta 1", False, watch))
+
+    def test_alvo_pausado_nao_e_lido_quando_outro_item_continua_ativo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            active = {"name": "Active Item", "conta": "Conta 1"}
+            paused = {"name": "Paused Item", "conta": "Conta 2"}
+            paused_key = alert._target_key(paused)
+            active_key = alert._target_key(active)
+            write_json(watch, {"targets": [active, {**paused, "paused": True}], "hits": []})
+            write_json(accounts, {"contas": [
+                {"nome": "Conta 1", "save": json.dumps({"Active Item": 1})},
+                {"nome": "Conta 2", "save": json.dumps({"Paused Item": 9})},
+            ]})
+            write_json(prices, {"itens": {"Active Item": {"sell": 1}, "Paused Item": {"sell": 1}}})
+            write_json(state, {"accounts": {}, "target_baselines": {
+                active_key: {"accounts": {"conta 1": 0}},
+                paused_key: {"accounts": {"conta 2": 4}},
+            }})
+            inventory = TrackingFakeInventory()
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+            ):
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, inventory, lambda _hit: None,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
+
+            self.assertEqual(inventory.reads, ["{\"Active Item\": 1}"])
+            self.assertEqual(hits, [{"name": "Active Item", "conta": "Conta 1", "qtd": 1}])
+            saved = alert._read_json(state, {})
+            self.assertEqual(saved["target_baselines"][paused_key]["accounts"], {"conta 2": 4})
+            self.assertEqual(alert.load_targets(watch), [
+                {"name": "Active Item", "conta": "Conta 1"},
+                {"name": "Paused Item", "conta": "Conta 2", "paused": True},
+            ])
+
+    def test_retomar_define_baseline_sem_alertar_por_drops_da_pausa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            target = {"name": "Shadow Bow", "conta": "Conta 1"}
+            target_key = alert._target_key(target)
+            old_hit = {"name": "Older Item", "conta": "Conta 1", "qtd": 2, "acknowledged": True}
+            write_json(watch, {"targets": [{**target, "paused": True}], "hits": [old_hit]})
+            write_json(accounts, {"contas": [{
+                "nome": "Conta 1", "save": json.dumps({"Shadow Bow": 4})
+            }]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            write_json(state, {"accounts": {"Conta 1": {"Shadow Bow": 1}},
+                               "target_baselines": {target_key: {"accounts": {"conta 1": 1}}}})
+            self.assertTrue(alert.set_target_paused("Shadow Bow", "Conta 1", False, watch))
+            drops, zones = [], []
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+            ):
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), drops.append,
+                    zone_reader=lambda _save: {"act": 1, "no": 1, "diff_index": 0},
+                    notify_zone=zones.append,
+                ), [])
+                self.assertEqual(drops, [])
+                self.assertEqual(zones, [])
+                self.assertNotIn("baseline_pending", alert._read_json(watch, {})["targets"][0])
+                self.assertEqual(alert._read_json(state, {})["target_baselines"][target_key]["accounts"], {"conta 1": 4})
+                self.assertEqual(alert._read_json(watch, {})["hits"], [old_hit])
+
+                write_json(accounts, {"contas": [{
+                    "nome": "Conta 1", "save": json.dumps({"Shadow Bow": 5})
+                }]})
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, FakeInventory(), drops.append,
+                    zone_reader=lambda _save: {"act": 1, "no": 1, "diff_index": 0},
+                    notify_zone=zones.append,
+                )
+
+            self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}])
+            self.assertEqual(drops, hits)
+            self.assertEqual(len(alert._read_json(watch, {})["hits"]), 2)
+
+    def test_retomar_espera_por_save_legivel_antes_de_limpar_a_pausa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            accounts = os.path.join(tmp, "accounts.json")
+            state = os.path.join(tmp, "state.json")
+            prices = os.path.join(tmp, "prices.json")
+            target = {"name": "Shadow Bow", "conta": "Conta 1"}
+            target_key = alert._target_key(target)
+            write_json(watch, {"targets": [{**target, "paused": True}], "hits": []})
+            write_json(accounts, {"contas": [{"nome": "Conta 1", "save": "broken"}]})
+            write_json(prices, {"itens": {"Shadow Bow": {"sell": 1}}})
+            write_json(state, {"accounts": {"Conta 1": {"Shadow Bow": 1}},
+                               "target_baselines": {target_key: {"accounts": {"conta 1": 1}}}})
+            inventory = FakeInventory()
+            self.assertTrue(alert.set_target_paused("Shadow Bow", "Conta 1", False, watch))
+            with (
+                mock.patch.object(alert, "_GAME_DATA_CACHE", None),
+                mock.patch.object(alert, "_GAME_DATA_OWNER", None),
+                mock.patch.object(alert, "_LAST_SCAN_ERRORS", {}),
+            ):
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, inventory,
+                    lambda _hit: self.fail("nao deve alertar enquanto o save nao esta legivel"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
+                self.assertTrue(alert._read_json(watch, {})["targets"][0]["baseline_pending"])
+                write_json(accounts, {"contas": [{
+                    "nome": "Conta 1", "save": json.dumps({"Shadow Bow": 4})
+                }]})
+                self.assertEqual(alert.poll_once(
+                    state, watch, accounts, prices, inventory,
+                    lambda _hit: self.fail("nao deve alertar sobre itens ganhos durante a pausa"),
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                ), [])
+                self.assertNotIn("baseline_pending", alert._read_json(watch, {})["targets"][0])
+                write_json(accounts, {"contas": [{
+                    "nome": "Conta 1", "save": json.dumps({"Shadow Bow": 5})
+                }]})
+                hits = alert.poll_once(
+                    state, watch, accounts, prices, inventory, lambda _hit: None,
+                    zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
+                )
+            self.assertEqual(hits, [{"name": "Shadow Bow", "conta": "Conta 1", "qtd": 1}])
+
+    def test_load_targets_preserva_estado_de_pausa_antigo_e_novo_formato(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            watch = os.path.join(tmp, "watch.json")
+            write_json(watch, {"targets": [
+                {"name": "Active Item", "conta": "Conta 1"},
+                {"name": "Paused Item", "conta": "Conta 2", "paused": True},
+            ], "hits": []})
+            self.assertEqual(alert.load_targets(watch), [
+                {"name": "Active Item", "conta": "Conta 1"},
+                {"name": "Paused Item", "conta": "Conta 2", "paused": True},
+            ])
 
     def test_clique_farm_inicializa_com_quantidade_atual_sem_alerta_falso(self):
         with tempfile.TemporaryDirectory() as tmp:
