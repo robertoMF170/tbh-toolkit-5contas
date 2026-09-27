@@ -1811,8 +1811,7 @@ def main() -> None:
                         if ":" in _g:
                             _, _nm = _g.split(":", 1)
                             _need_names.add(_nm.strip())
-                for _candidate in _farm_drop_mod.itens_diarios_para_build(_b):
-                    _need_names.add(_candidate[3])
+                # Também calcula o drop das variantes de baixo valor específicas desta build.
                 for _candidate in _farm_drop_mod.itens_diarios_para_build(_b):
                     _need_names.add(_candidate[3])
             except Exception:

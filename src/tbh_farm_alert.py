@@ -983,7 +983,7 @@ def _supervise_watch_loop(interval: float, report_interval: float,
                 except (AttributeError, TypeError, ValueError):
                     heartbeat_age = float("inf")
                 if heartbeat_age > stale_after:
-                    print(f"[FARM] Ja existe uma vigia, mas o heartbeat tem {heartbeat_age:.0f}s. Nao vou terminar um processo externo; aguardo o bloqueio libertar.", flush=True)
+                    print(f"[FARM] Ja existe uma vigia com heartbeat parado ha {heartbeat_age:.0f}s. Aguardo o bloqueio libertar; nao termino processos que nao iniciei.", flush=True)
                 else:
                     print("[FARM] Ja existe uma vigia ativa; acompanho-a sem iniciar uma copia.", flush=True)
                 watching_existing = True
