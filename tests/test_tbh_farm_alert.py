@@ -328,21 +328,28 @@ class TestAlertData(FarmAlertTestCase):
                 return self.returncode
 
         output = io.StringIO()
-        with (
-            mock.patch.object(alert.subprocess, "Popen", side_effect=[
-                ExitedProcess(101, 1),
-                ExitedProcess(102, 5),
-            ]) as popen,
-            mock.patch.object(alert.time, "sleep"),
-            redirect_stdout(output),
-        ):
-            result = alert.supervise_watch(interval=2, report_interval=60, restart_delay=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = os.path.join(tmp, "supervisor.lock")
+            with (
+                mock.patch.object(alert, "_acquire_watch_lock", return_value=123) as acquire,
+                mock.patch.object(alert, "_release_watch_lock") as release,
+                mock.patch.object(alert, "_watch_process_running", side_effect=[False, False, True]),
+                mock.patch.object(alert.subprocess, "Popen", side_effect=[
+                    ExitedProcess(101, 1),
+                    ExitedProcess(102, 5),
+                ]) as popen,
+                mock.patch.object(alert.time, "sleep", side_effect=[None, KeyboardInterrupt]),
+                redirect_stdout(output),
+            ):
+                result = alert.supervise_watch(interval=2, report_interval=60, restart_delay=1, lock_file=lock)
 
         self.assertEqual(result, 0)
         self.assertEqual(popen.call_count, 2)
+        self.assertEqual(acquire.call_args.args[0], lock)
+        release.assert_called_once_with(123)
         self.assertIn("--watch", popen.call_args_list[0].args[0])
         self.assertIn("terminou com codigo 1", output.getvalue())
-        self.assertIn("Outro vigia ja possui o bloqueio", output.getvalue())
+        self.assertIn("o bloqueio foi ocupado durante o arranque", output.getvalue())
 
     def test_snapshot_falhado_nao_reutiliza_baseline_antiga_de_outra_conta(self):
         with tempfile.TemporaryDirectory() as tmp:

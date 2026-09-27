@@ -161,8 +161,10 @@ echo       A vigia consulta os saves de 2 em 2 segundos; Discord e opcional.
 if not exist "%~dp0var" mkdir "%~dp0var"
 python -X utf8 src\tbh_farm_alert.py --discord-prompt
 if errorlevel 1 echo [FARM] Nao foi possivel concluir a opcao Discord; a vigia local continua.
-python -X utf8 src\tbh_farm_alert.py --check-running >nul
+python -X utf8 src\tbh_farm_alert.py --check-supervisor >nul
 if not errorlevel 1 goto farm_already_running
+python -X utf8 src\tbh_farm_alert.py --check-running >nul
+if not errorlevel 1 echo       Ja existe uma vigia; o supervisor acompanha-a e reinicia-a se terminar.
 start "" /B python -X utf8 -u src\tbh_farm_alert.py --supervise-watch --interval 2 --report-interval 900
 echo       A verificar arranque do processo...
 timeout /t 2 /nobreak >nul

@@ -44,6 +44,7 @@ var/farm_watch.heartbeat
 var/farm_alert.heartbeat
 var/farm_alert_state.json
 var/farm_alert.lock
+var/farm_alert_supervisor.lock
 var/visitas.json
 events.db
 debug.txt

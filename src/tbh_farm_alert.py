@@ -8,7 +8,6 @@ import argparse
 import getpass
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -949,9 +948,9 @@ def _stop_watch_process(process) -> None:
 
 def supervise_watch(interval: float = 2.0, report_interval: float = 900.0,
                     restart_delay: float = 3.0,
-                    lock_file: str = SUPERVISOR_LOCK_FILE) -> int:
+                    lock_file: str | None = None) -> int:
     """Keep one save-watcher supervisor alive and restart a stopped or stuck watcher."""
-    lock_fd = _acquire_watch_lock(lock_file)
+    lock_fd = _acquire_watch_lock(lock_file or SUPERVISOR_LOCK_FILE)
     if lock_fd is None:
         print("[FARM] Ja existe um supervisor da vigia ativo; nao vou iniciar outro.", flush=True)
         return 0
@@ -972,9 +971,29 @@ def _supervise_watch_loop(interval: float, report_interval: float,
         "--watch", "--interval", str(interval),
         "--report-interval", str(report_interval),
     ]
-    print("[FARM] Supervisor ativo: vai reiniciar o vigia se este parar ou bloquear.", flush=True)
+    print("[FARM] Supervisor ativo: vai reiniciar a vigia se o processo parar ou bloquear.", flush=True)
+    watching_existing = False
 
     while True:
+        if _watch_process_running():
+            if not watching_existing:
+                heartbeat = _read_json(HEARTBEAT_FILE, {})
+                try:
+                    heartbeat_age = time.time() - float(heartbeat.get("updated_epoch") or 0)
+                except (AttributeError, TypeError, ValueError):
+                    heartbeat_age = float("inf")
+                if heartbeat_age > stale_after:
+                    print(f"[FARM] Ja existe uma vigia, mas o heartbeat tem {heartbeat_age:.0f}s. Nao vou terminar um processo externo; aguardo o bloqueio libertar.", flush=True)
+                else:
+                    print("[FARM] Ja existe uma vigia ativa; acompanho-a sem iniciar uma copia.", flush=True)
+                watching_existing = True
+            try:
+                time.sleep(restart_delay)
+            except KeyboardInterrupt:
+                print("\n[FARM] Supervisor parado.", flush=True)
+                return 0
+            continue
+        watching_existing = False
         try:
             process = subprocess.Popen(command, cwd=ROOT)
         except OSError as exc:
@@ -1020,24 +1039,7 @@ def _supervise_watch_loop(interval: float, report_interval: float,
             return 0
 
         if return_code == 5:
-            if _watch_process_running():
-                heartbeat = _read_json(HEARTBEAT_FILE, {})
-                try:
-                    heartbeat_age = time.time() - float(heartbeat.get("updated_epoch") or 0)
-                    stale_pid = int(heartbeat.get("pid") or 0)
-                except (AttributeError, TypeError, ValueError):
-                    heartbeat_age, stale_pid = float("inf"), 0
-                if heartbeat_age > stale_after and stale_pid > 0 and stale_pid != os.getpid():
-                    print(f"[FARM] Vigia com heartbeat parado ha {heartbeat_age:.0f}s; a terminar PID {stale_pid} para o reiniciar.", flush=True)
-                    try:
-                        os.kill(stale_pid, signal.SIGTERM)
-                    except OSError as exc:
-                        print(f"[FARM] Nao consegui terminar o vigia bloqueado ({type(exc).__name__}: {exc}); vou tentar novamente.", flush=True)
-                else:
-                    print("[FARM] Ja existe uma vigia; vou evitar duplicados e tentar assumir quando o bloqueio libertar.", flush=True)
-                restart_reason = "bloqueio da vigia ainda ocupado"
-            else:
-                restart_reason = "bloqueio libertado durante o arranque; nova tentativa"
+            restart_reason = "o bloqueio foi ocupado durante o arranque"
         elif not restart_reason:
             restart_reason = f"processo terminou com codigo {return_code}"
         print(f"[FARM] {restart_reason}; nova tentativa em {restart_delay:g}s.", flush=True)

@@ -1813,6 +1813,8 @@ def main() -> None:
                             _need_names.add(_nm.strip())
                 for _candidate in _farm_drop_mod.itens_diarios_para_build(_b):
                     _need_names.add(_candidate[3])
+                for _candidate in _farm_drop_mod.itens_diarios_para_build(_b):
+                    _need_names.add(_candidate[3])
             except Exception:
                 pass
         # também TODO o FARM OP do dia (são só ~84 itens, map -> 19 ficaram só 10 stages cada = 30KB aceitável)
