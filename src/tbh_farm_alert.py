@@ -132,10 +132,145 @@ def load_targets(path: str = WATCH_FILE) -> list[dict]:
     data = _watch_data(path)
     return [
         {"name": str(target.get("name") or "").strip(),
-         "conta": str(target.get("conta") or "").strip()}
+         "conta": str(target.get("conta") or "").strip(),
+         "paused": bool(target.get("paused", False)),
+         "baseline_pending": bool(target.get("baseline_pending", False))}
         for target in data["targets"]
         if isinstance(target, dict) and str(target.get("name") or "").strip()
     ]
+
+
+def set_target_paused(name: str, conta: str = "", paused: bool = True,
+                      watch_file: str = WATCH_FILE) -> bool:
+    """Pause or resume one exact target without removing it or its hit history."""
+    name_key = str(name or "").strip().casefold()
+    conta_key = str(conta or "").strip().casefold()
+    if not name_key:
+        return False
+    data = _watch_data(watch_file)
+    for target in data["targets"]:
+        if not isinstance(target, dict):
+            continue
+        if (
+            str(target.get("name") or "").strip().casefold() != name_key
+            or str(target.get("conta") or "").strip().casefold() != conta_key
+        ):
+            continue
+        paused = bool(paused)
+        if bool(target.get("paused", False)) == paused:
+            return False
+        target["paused"] = paused
+        if paused:
+            target.pop("baseline_pending", None)
+        else:
+            # The first readable save after resuming becomes a fresh baseline;
+            # drops accumulated while paused are not reported retroactively.
+            target["baseline_pending"] = True
+        _write_json_atomic(watch_file, data)
+        return True
+    return False
+
+
+def _clear_baseline_pending(watch_file: str, target_keys: set[str]) -> None:
+    """Clear resume markers only after the corresponding fresh baseline is saved."""
+    if not target_keys:
+        return
+    data = _watch_data(watch_file)
+    changed = False
+    for target in data["targets"]:
+        if not isinstance(target, dict) or target.get("paused") or not target.get("baseline_pending"):
+            continue
+        if _target_key({
+            "name": str(target.get("name") or "").strip(),
+            "conta": str(target.get("conta") or "").strip(),
+        }) in target_keys:
+            target.pop("baseline_pending", None)
+            changed = True
+    if changed:
+        _write_json_atomic(watch_file, data)
+
+
+def _public_targets(targets: list[dict]) -> list[dict]:
+    """Return target fields intended for the dashboard API, not watcher internals."""
+    return [
+        {"name": target["name"], "conta": target.get("conta") or "",
+         "paused": bool(target.get("paused", False))}
+        for target in targets
+    ]
+
+
+def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
+               state_file: str = STATE_FILE, accounts_file: str = ACCOUNTS_FILE,
+               price_file: str = PRICE_FILE, inventory=None) -> bool:
+    name = str(name or "").strip()
+    conta = str(conta or "").strip()
+    if not name:
+        return False
+    data = _watch_data(watch_file)
+    key = (name.casefold(), conta.casefold())
+    for target in data["targets"]:
+        if isinstance(target, dict) and (
+            str(target.get("name") or "").strip().casefold(),
+            str(target.get("conta") or "").strip().casefold(),
+        ) == key:
+            return False
+
+    state = _read_json(state_file, {})
+    if not isinstance(state, dict):
+        state = {}
+    old_accounts = state.get("accounts", {})
+    if not isinstance(old_accounts, dict):
+        old_accounts = {}
+    old_baselines = state.get("target_baselines", {})
+    if not isinstance(old_baselines, dict):
+        old_baselines = {}
+
+    accounts = load_accounts(accounts_file)
+    selected_account = resolve_account_name(conta, accounts) if conta else None
+    if conta and not selected_account:
+        configured = ", ".join(account["name"] for account in accounts) or "nenhuma conta configurada"
+        print(f"[FARM] AVISO: '{conta}' nao corresponde a uma conta unica. O alvo fica associado a esse nome e nao alertara ate a conta ser resolvida. Configuradas: {configured}.", flush=True)
+    if selected_account:
+        accounts = [account for account in accounts if account["name"] == selected_account]
+
+    # Try to snapshot current inventory to prevent false positives. A missing
+    # dependency/save must not prevent registering an alert: the watcher will
+    # retry and establish its first baseline once it can read that save.
+    current, failed = {}, set()
+    try:
+        current, failed = scan_inventories(accounts, _market_names([{"name": name}], price_file), inventory)
+    except (Exception, SystemExit) as exc:
+        failed = {account["name"] for account in accounts}
+        print(f"[FARM] Snapshot inicial indisponivel ({type(exc).__name__}: {exc}); alvo registado e o vigia vai tentar novamente.", flush=True)
+    readable_current = dict(current)
+    folded_old = {str(account).casefold(): items for account, items in old_accounts.items()}
+    for account in failed:
+        if account.casefold() in folded_old:
+            current[account] = folded_old[account.casefold()]
+    # Keep an explicit empty baseline for unreadable accounts. Otherwise poll_once
+    # could mistake an older global snapshot for the moment this target was added.
+    baseline_accounts = {
+        account.casefold(): _item_count(items, name)
+        for account, items in readable_current.items()
+    }
+    if selected_account:
+        # Ignore snapshots from other accounts retained in old_state: this target
+        # must only compare against the account explicitly selected by the user.
+        baseline_accounts = {
+            account.casefold(): _item_count(items, name)
+            for account, items in readable_current.items()
+            if account.casefold() == selected_account.casefold()
+        }
+    old_baselines[_target_key({"name": name, "conta": conta})] = {"accounts": baseline_accounts}
+    state.update({"version": 1, "accounts": {**old_accounts, **current}, "target_baselines": old_baselines})
+
+    _write_json_atomic(state_file, state)
+
+    # Persist the watch request even if reading saves failed; the running monitor
+    # can retry as soon as the save becomes available or its lock is released.
+    data["targets"].append({"name": name, "conta": conta})
+    _write_json_atomic(watch_file, data)
+    return True
 
 
 def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
@@ -401,13 +536,17 @@ def _item_count(items: dict, name: str) -> int:
 def _farm_window_title(targets: list[dict]) -> str:
     if not targets:
         return "TBH RUN - Alertas de farm (sem alvos)"
+    active_count = sum(not target.get("paused") for target in targets)
+    paused_count = len(targets) - active_count
     if len(targets) == 1:
         target = targets[0]
         account = target.get("conta") or "Todas as contas"
-        return f"TBH RUN - {target['name']} @ {account}"[:120]
+        state = " (pausado)" if target.get("paused") else ""
+        return f"TBH RUN - {target['name']} @ {account}{state}"[:120]
     names = ", ".join(target["name"] for target in targets[:2])
     suffix = f" +{len(targets) - 2}" if len(targets) > 2 else ""
-    return f"TBH RUN - {len(targets)} alertas: {names}{suffix}"[:120]
+    paused = f" ({paused_count} em pausa)" if paused_count else ""
+    return f"TBH RUN - {active_count} alertas: {names}{suffix}{paused}"[:120]
 
 
 def _set_farm_window_title(targets: list[dict]) -> None:
@@ -452,8 +591,9 @@ def _write_heartbeat(targets: list[dict], accounts: list[dict], interval: float,
         "updated_epoch": time.time(),
         "interval_seconds": interval,
         "status": status,
-        "target_count": len(targets),
-        "targets": [{"name": target["name"], "conta": target.get("conta") or ""} for target in targets],
+        "target_count": sum(not target.get("paused") for target in targets),
+        "paused_target_count": sum(bool(target.get("paused")) for target in targets),
+        "targets": _public_targets(targets),
         "account_count": len(accounts),
         "accounts": [account["name"] for account in accounts],
         "watched_account_count": len(watched_accounts),
@@ -553,15 +693,20 @@ def _print_watch_summary(targets: list[dict], accounts: list[dict],
                          watch_file: str | None = None) -> None:
     """Print a concise target/hit summary only when requested or targets change."""
     counts = _target_hit_summary(targets, accounts, watch_file)
-    print(f"[FARM] Alvos a vigiar ({len(targets)}):", flush=True)
+    active_count = sum(not target.get("paused") for target in targets)
+    paused_count = len(targets) - active_count
+    print(f"[FARM] Alvos a vigiar ({active_count}):", flush=True)
+    if paused_count:
+        print(f"[FARM] Alvos em pausa ({paused_count}):", flush=True)
     total_quantity = total_alerts = 0
     for target, count in zip(targets, counts):
         account = target.get("conta") or "todas as contas"
+        state = " — PAUSADO" if target.get("paused") else ""
         unit_word = "unidade" if count["qtd"] == 1 else "unidades"
         found_word = "encontrada" if count["qtd"] == 1 else "encontradas"
         alert_word = "alerta" if count["alertas"] == 1 else "alertas"
         print(
-            f"[FARM]   {target['name']} @ {account} — {count['qtd']} {unit_word} "
+            f"[FARM]   {target['name']} @ {account}{state} — {count['qtd']} {unit_word} "
             f"{found_word} em {count['alertas']} {alert_word}.",
             flush=True,
         )
@@ -1235,7 +1380,8 @@ def _matching_target_hits(targets: list[dict], accounts: list[dict]) -> list[dic
 def _status_target_label(target: dict) -> str:
     item = str(target.get("name") or "?")
     account = str(target.get("conta") or "todas as contas")
-    return f"{item} @ {account}"
+    state = " (pausado)" if target.get("paused") else ""
+    return f"{item} @ {account}{state}"
 
 
 def _status_report(args, compact: bool = False) -> int:
@@ -1294,6 +1440,7 @@ def _status_report(args, compact: bool = False) -> int:
                 drops_text = "nenhum drop registado para estes alvos ainda"
             state_labels = {
                 "active": "VIGIA ATIVO — A VIGIAR",
+                "paused": "VIGIA ATIVO — ALVOS EM PAUSA",
                 "waiting_for_targets": "VIGIA ATIVO — À ESPERA DE ALVOS",
                 "save_read_error": "VIGIA ATIVO — ERRO DE SAVE",
                 "partial_warning": "VIGIA ATIVO — COM AVISO",
@@ -1318,7 +1465,9 @@ def _status_report(args, compact: bool = False) -> int:
                 flush=True,
             )
         else:
-            print(f"VIGIA ATIVO — {heartbeat.get('target_count', len(targets))} alvo(s), estado: {status}.")
+            active_count = heartbeat.get("target_count", sum(not target.get("paused") for target in targets))
+            paused_count = heartbeat.get("paused_target_count", sum(bool(target.get("paused")) for target in targets))
+            print(f"VIGIA ATIVO — {active_count} alvo(s) a vigiar, {paused_count} em pausa, estado: {status}.")
             _print_watch_summary(targets, status_accounts)
             print("Contas vigiadas: " + (", ".join(account["name"] for account in watched_accounts) or "nenhuma") + ".")
             if args.conta:
