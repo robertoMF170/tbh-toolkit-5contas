@@ -8,6 +8,7 @@ import argparse
 import getpass
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -35,6 +36,7 @@ ACCOUNTS_FILE = _first_existing([
 ])
 STATE_FILE = os.path.join(ROOT, "var", "farm_alert_state.json")
 LOCK_FILE = os.path.join(ROOT, "var", "farm_alert.lock")
+SUPERVISOR_LOCK_FILE = os.path.join(ROOT, "var", "farm_alert_supervisor.lock")
 # The legacy tbh_farm_watch.py writes a plain-text timestamp to its own
 # farm_watch.heartbeat; keep this JSON health marker separate.
 HEARTBEAT_FILE = os.path.join(ROOT, "var", "farm_alert.heartbeat")
@@ -946,12 +948,25 @@ def _stop_watch_process(process) -> None:
 
 
 def supervise_watch(interval: float = 2.0, report_interval: float = 900.0,
-                    restart_delay: float = 3.0) -> int:
-    """Keep the save watcher alive and restart it if it exits or stops updating."""
+                    restart_delay: float = 3.0,
+                    lock_file: str = SUPERVISOR_LOCK_FILE) -> int:
+    """Keep one save-watcher supervisor alive and restart a stopped or stuck watcher."""
+    lock_fd = _acquire_watch_lock(lock_file)
+    if lock_fd is None:
+        print("[FARM] Ja existe um supervisor da vigia ativo; nao vou iniciar outro.", flush=True)
+        return 0
+    try:
+        return _supervise_watch_loop(interval, report_interval, restart_delay)
+    finally:
+        _release_watch_lock(lock_fd)
+
+
+def _supervise_watch_loop(interval: float, report_interval: float,
+                          restart_delay: float) -> int:
     interval = max(0.5, min(interval, 60.0))
     report_interval = max(1.0, min(report_interval, 86400.0))
     restart_delay = max(1.0, min(restart_delay, 60.0))
-    stale_after = max(30.0, interval * 10)
+    stale_after = max(120.0, interval * 30)
     command = [
         sys.executable, "-X", "utf8", "-u", os.path.abspath(__file__),
         "--watch", "--interval", str(interval),
@@ -1005,9 +1020,25 @@ def supervise_watch(interval: float = 2.0, report_interval: float = 900.0,
             return 0
 
         if return_code == 5:
-            print("[FARM] Outro vigia ja possui o bloqueio; supervisor parado para evitar duplicados.", flush=True)
-            return 0
-        if not restart_reason:
+            if _watch_process_running():
+                heartbeat = _read_json(HEARTBEAT_FILE, {})
+                try:
+                    heartbeat_age = time.time() - float(heartbeat.get("updated_epoch") or 0)
+                    stale_pid = int(heartbeat.get("pid") or 0)
+                except (AttributeError, TypeError, ValueError):
+                    heartbeat_age, stale_pid = float("inf"), 0
+                if heartbeat_age > stale_after and stale_pid > 0 and stale_pid != os.getpid():
+                    print(f"[FARM] Vigia com heartbeat parado ha {heartbeat_age:.0f}s; a terminar PID {stale_pid} para o reiniciar.", flush=True)
+                    try:
+                        os.kill(stale_pid, signal.SIGTERM)
+                    except OSError as exc:
+                        print(f"[FARM] Nao consegui terminar o vigia bloqueado ({type(exc).__name__}: {exc}); vou tentar novamente.", flush=True)
+                else:
+                    print("[FARM] Ja existe uma vigia; vou evitar duplicados e tentar assumir quando o bloqueio libertar.", flush=True)
+                restart_reason = "bloqueio da vigia ainda ocupado"
+            else:
+                restart_reason = "bloqueio libertado durante o arranque; nova tentativa"
+        elif not restart_reason:
             restart_reason = f"processo terminou com codigo {return_code}"
         print(f"[FARM] {restart_reason}; nova tentativa em {restart_delay:g}s.", flush=True)
         try:
@@ -1380,7 +1411,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--status", action="store_true", help="acompanha continuamente o vigia, sem limpar o terminal")
     parser.add_argument("--once", action="store_true", help="com --status, mostra o estado uma vez e termina")
     parser.add_argument("--status-interval", type=float, default=5.0, help="segundos entre atualizacoes do status (predefinicao 5)")
-    parser.add_argument("--check-running", action="store_true", help="verifica o bloqueio do processo sem iniciar outra vigia")
+    parser.add_argument("--check-running", action="store_true", help="verifica o bloqueio da vigia sem iniciar outro processo")
+    parser.add_argument("--check-supervisor", action="store_true", help="verifica se o supervisor da vigia ja esta ativo")
     parser.add_argument("--discord-setup", action="store_true", help="guarda o webhook e o ID opcional do utilizador num .env local")
     parser.add_argument("--test-discord", action="store_true", help="envia uma mensagem de teste para o webhook configurado")
     parser.add_argument("--interval", type=float, default=2.0, help="intervalo entre verificacoes (segundos)")
@@ -1402,6 +1434,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_running:
         running = _watch_process_running()
         print("VIGIA JA EM EXECUCAO." if running else "VIGIA NAO ESTA EM EXECUCAO.", flush=True)
+        return 0 if running else 1
+    if args.check_supervisor:
+        running = _watch_process_running(SUPERVISOR_LOCK_FILE)
+        print("SUPERVISOR JA EM EXECUCAO." if running else "SUPERVISOR NAO ESTA EM EXECUCAO.", flush=True)
         return 0 if running else 1
     if args.discord_disable:
         tbh_discord.set_discord_enabled(False)

@@ -315,6 +315,35 @@ class TestAlertData(FarmAlertTestCase):
                 alert._release_watch_lock(owner)
             self.assertFalse(alert._watch_process_running(lock))
 
+    def test_supervisor_reinicia_o_vigia_depois_de_um_crash(self):
+        class ExitedProcess:
+            def __init__(self, pid, returncode):
+                self.pid = pid
+                self.returncode = returncode
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self):
+                return self.returncode
+
+        output = io.StringIO()
+        with (
+            mock.patch.object(alert.subprocess, "Popen", side_effect=[
+                ExitedProcess(101, 1),
+                ExitedProcess(102, 5),
+            ]) as popen,
+            mock.patch.object(alert.time, "sleep"),
+            redirect_stdout(output),
+        ):
+            result = alert.supervise_watch(interval=2, report_interval=60, restart_delay=1)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(popen.call_count, 2)
+        self.assertIn("--watch", popen.call_args_list[0].args[0])
+        self.assertIn("terminou com codigo 1", output.getvalue())
+        self.assertIn("Outro vigia ja possui o bloqueio", output.getvalue())
+
     def test_snapshot_falhado_nao_reutiliza_baseline_antiga_de_outra_conta(self):
         with tempfile.TemporaryDirectory() as tmp:
             watch = os.path.join(tmp, "watch.json")

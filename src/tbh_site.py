@@ -1811,11 +1811,13 @@ def main() -> None:
                         if ":" in _g:
                             _, _nm = _g.split(":", 1)
                             _need_names.add(_nm.strip())
+                for _candidate in _farm_drop_mod.itens_diarios_para_build(_b):
+                    _need_names.add(_candidate[3])
             except Exception:
                 pass
         # também TODO o FARM OP do dia (são só ~84 itens, map -> 19 ficaram só 10 stages cada = 30KB aceitável)
         try:
-            _dnames, _dmap, _rank, _t = _farm_drop_mod._get_daily_cached()
+            _dnames, _dmap, _rank, _market_items, _t = _farm_drop_mod._get_daily_cached()
             for _k in list(_dmap.keys()):
                 _need_names.add(_k)
         except Exception:

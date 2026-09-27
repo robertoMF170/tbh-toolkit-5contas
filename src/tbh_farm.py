@@ -556,16 +556,23 @@ def itens_diarios_para_build(build: dict):
             if not base:
                 continue
             prefix = base + " ("
-            matches = [
+            variants = [
                 (market_name, item)
                 for market_name, item in market_items.items()
                 if market_name.startswith(prefix)
-                and (market_name in daily_names or _market_sell_price(item) >= BUILD_FARM_MIN_SELL)
             ]
-            if not matches:
-                continue
-            best = max(matches, key=lambda kv: _hybrid_score(kv[1]))
-            cands.append((hero_short, slot.strip(), base, best[0], best[1]))
+            daily_matches = [(market_name, item) for market_name, item in variants if market_name in daily_names]
+            if daily_matches:
+                # Mantém a melhor variante do ranking diário como antes.
+                best_daily = max(daily_matches, key=lambda kv: _hybrid_score(kv[1]))
+                cands.append((hero_short, slot.strip(), base, best_daily[0], best_daily[1]))
+            # As alternativas ≥ €0,20 são mostradas à parte, sem alargar os rankings globais.
+            cands.extend(
+                (hero_short, slot.strip(), base, market_name, item)
+                for market_name, item in variants
+                if market_name not in daily_names
+                and _market_sell_price(item) >= BUILD_FARM_MIN_SELL
+            )
     # ordenar: híbrido mais valioso primeiro
     cands.sort(key=lambda x: _hybrid_score(x[4]), reverse=True)
     return cands

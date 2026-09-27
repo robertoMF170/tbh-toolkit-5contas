@@ -156,14 +156,14 @@ echo.
 rem --- Alertas de farm: o run pergunta pelo Discord antes de abrir a dashboard ---
 if not exist "%~dp0src\tbh_farm_alert.py" goto sem_farm_alert
 :iniciar_farm_alert
-echo [FARM] A vigia consulta os saves de 2 em 2 segundos, sem linhas repetidas.
-echo       Os drops ficam na dashboard; o Discord e opcional e nao envia teste no arranque.
+echo [FARM] Supervisor ativo: reinicia a vigia se o processo parar ou bloquear.
+echo       A vigia consulta os saves de 2 em 2 segundos; Discord e opcional.
 if not exist "%~dp0var" mkdir "%~dp0var"
 python -X utf8 src\tbh_farm_alert.py --discord-prompt
 if errorlevel 1 echo [FARM] Nao foi possivel concluir a opcao Discord; a vigia local continua.
 python -X utf8 src\tbh_farm_alert.py --check-running >nul
 if not errorlevel 1 goto farm_already_running
-start "" /B python -X utf8 -u src\tbh_farm_alert.py --watch --interval 2 --report-interval 900
+start "" /B python -X utf8 -u src\tbh_farm_alert.py --supervise-watch --interval 2 --report-interval 900
 echo       A verificar arranque do processo...
 timeout /t 2 /nobreak >nul
 python -X utf8 src\tbh_farm_alert.py --status --once --interval 2
@@ -260,7 +260,7 @@ if not defined TEM_BAUS goto sem_monitor
 echo [5/5] A iniciar CICLO ESTAVEL 15 min
 echo       leve a cada 2 min (saves locais - baus/progresso/UPAR JA/inventario)
 echo       completo a cada 15 min (regenera builds SKILLS/RUNAS sincronizadas)
-echo       alertas de drop correm nesta janela em paralelo, a cada 2 segundos
+echo       supervisor dos alertas de drop corre nesta janela em paralelo (polling 2s)
 echo       log: var\baus_monitor.log  - deixa esta janela ABERTA durante o farm
 echo       Para parar de vez: fecha esta janela
 echo ============================================================
