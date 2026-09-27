@@ -8,6 +8,7 @@ import argparse
 import getpass
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -933,6 +934,89 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     return hits
 
 
+def _stop_watch_process(process) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def supervise_watch(interval: float = 2.0, report_interval: float = 900.0,
+                    restart_delay: float = 3.0) -> int:
+    """Keep the save watcher alive and restart it if it exits or stops updating."""
+    interval = max(0.5, min(interval, 60.0))
+    report_interval = max(1.0, min(report_interval, 86400.0))
+    restart_delay = max(1.0, min(restart_delay, 60.0))
+    stale_after = max(30.0, interval * 10)
+    command = [
+        sys.executable, "-X", "utf8", "-u", os.path.abspath(__file__),
+        "--watch", "--interval", str(interval),
+        "--report-interval", str(report_interval),
+    ]
+    print("[FARM] Supervisor ativo: vai reiniciar o vigia se este parar ou bloquear.", flush=True)
+
+    while True:
+        try:
+            process = subprocess.Popen(command, cwd=ROOT)
+        except OSError as exc:
+            print(f"[FARM] Nao consegui iniciar o vigia ({type(exc).__name__}: {exc}); nova tentativa em {restart_delay:g}s.", flush=True)
+            try:
+                time.sleep(restart_delay)
+            except KeyboardInterrupt:
+                print("\n[FARM] Supervisor parado.", flush=True)
+                return 0
+            continue
+
+        print(f"[FARM] Vigia iniciado (PID {process.pid}).", flush=True)
+        started = time.monotonic()
+        last_heartbeat = None
+        last_heartbeat_change = started
+        restart_reason = ""
+        try:
+            while process.poll() is None:
+                now = time.monotonic()
+                heartbeat = _read_json(HEARTBEAT_FILE, {})
+                if isinstance(heartbeat, dict) and str(heartbeat.get("pid") or "") == str(process.pid):
+                    try:
+                        updated = float(heartbeat.get("updated_epoch") or 0)
+                    except (TypeError, ValueError):
+                        updated = 0.0
+                    if updated and updated != last_heartbeat:
+                        last_heartbeat = updated
+                        last_heartbeat_change = now
+                    elif now - last_heartbeat_change > stale_after:
+                        restart_reason = f"heartbeat sem mudanca ha {now - last_heartbeat_change:.0f}s"
+                elif now - started > stale_after:
+                    restart_reason = "o processo nao publicou heartbeat"
+
+                if restart_reason:
+                    print(f"[FARM] Vigia bloqueado ({restart_reason}); a reiniciar.", flush=True)
+                    _stop_watch_process(process)
+                    break
+                time.sleep(min(1.0, interval))
+            return_code = process.wait()
+        except KeyboardInterrupt:
+            _stop_watch_process(process)
+            print("\n[FARM] Supervisor parado.", flush=True)
+            return 0
+
+        if return_code == 5:
+            print("[FARM] Outro vigia ja possui o bloqueio; supervisor parado para evitar duplicados.", flush=True)
+            return 0
+        if not restart_reason:
+            restart_reason = f"processo terminou com codigo {return_code}"
+        print(f"[FARM] {restart_reason}; nova tentativa em {restart_delay:g}s.", flush=True)
+        try:
+            time.sleep(restart_delay)
+        except KeyboardInterrupt:
+            print("\n[FARM] Supervisor parado.", flush=True)
+            return 0
+
+
 def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
     interval = max(0.5, min(interval, 60.0))
     report_interval = max(1.0, min(report_interval, 86400.0))
@@ -1291,6 +1375,8 @@ def _status_follow(args) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Vigia os itens farmados e alerta quando aparecem nos saves.")
     parser.add_argument("--watch", action="store_true", help="vigia continuamente, consultando a cada 2 segundos")
+    parser.add_argument("--supervise-watch", action="store_true", help="mantem o vigia em execucao e reinicia processos parados")
+    parser.add_argument("--restart-delay", type=float, default=3.0, help="segundos antes de reiniciar um vigia que parou")
     parser.add_argument("--status", action="store_true", help="acompanha continuamente o vigia, sem limpar o terminal")
     parser.add_argument("--once", action="store_true", help="com --status, mostra o estado uma vez e termina")
     parser.add_argument("--status-interval", type=float, default=5.0, help="segundos entre atualizacoes do status (predefinicao 5)")
@@ -1311,6 +1397,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.discord_prompt:
         return _discord_prompt()
+    if args.supervise_watch:
+        return supervise_watch(args.interval, args.report_interval, args.restart_delay)
     if args.check_running:
         running = _watch_process_running()
         print("VIGIA JA EM EXECUCAO." if running else "VIGIA NAO ESTA EM EXECUCAO.", flush=True)

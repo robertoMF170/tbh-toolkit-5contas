@@ -47,6 +47,7 @@ if not os.path.exists(CACHE_BAUS):
         if os.path.exists(alt): CACHE_BAUS = alt; break
 
 MARKET_URL = "https://steamcommunity.com/market/listings/3678970/"
+BUILD_FARM_MIN_SELL = 0.20  # alternativas para builds; a FARM OP global mantém os rankings atuais
 WATCH_FILE = _cfg_path("var", "farm_watch.json")
 # compat var/farm_watch fallback
 if not os.path.exists(WATCH_FILE):
@@ -507,15 +508,15 @@ def _hybrid_score(v) -> float:
     except Exception:
         return 0.0
 
-_DAILY_CACHE = None  # (set nomes, dict nome->valor, rank dict, t)
+_DAILY_CACHE = None  # (set nomes diários, mapa diário, ranking, mercado completo, t)
 
 def _get_daily_cached():
     global _DAILY_CACHE
     if _DAILY_CACHE is not None:
         return _DAILY_CACHE
     itens, t = _load_precos()
-    if not itens:
-        _DAILY_CACHE = (set(), {}, {"vend_total": 0, "top_hybrid": [], "baleias": [], "liquidos": [], "sweet": [], "moedinhas": []}, 0)
+    if not isinstance(itens, dict) or not itens:
+        _DAILY_CACHE = (set(), {}, {"vend_total": 0, "top_hybrid": [], "baleias": [], "liquidos": [], "sweet": [], "moedinhas": []}, {}, 0)
         return _DAILY_CACHE
     rank = _rank(itens)
     daily_names = set()
@@ -523,18 +524,25 @@ def _get_daily_cached():
         for k, _v in lst:
             daily_names.add(k)
     daily_map = {k: itens[k] for k in daily_names if k in itens}
-    _DAILY_CACHE = (daily_names, daily_map, rank, t)
+    _DAILY_CACHE = (daily_names, daily_map, rank, itens, t)
     return _DAILY_CACHE
 
 def daily_set() -> set:
-    """Conjunto de nomes do mercado que estão no farm diário (união 36+24+30+24 ≈82 únicos)."""
-    s, _, _, _ = _get_daily_cached()
+    """Conjunto de nomes nos rankings do farm diário (não inclui as alternativas exclusivas das builds)."""
+    s, _, _, _, _ = _get_daily_cached()
     return set(s)
 
+def _market_sell_price(item: dict) -> float:
+    try:
+        price = float(item.get("sell") or 0)
+        return price if math.isfinite(price) else 0.0
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return 0.0
+
 def itens_diarios_para_build(build: dict):
-    """Devolve [(hero, slot, base, best_name, valor), ...] só itens desta build cuja base tem variante no diário. Ordenado por hybrid desc."""
-    daily_names, daily_map, _, _ = _get_daily_cached()
-    if not daily_map:
+    """Devolve o melhor item de cada peça da build: ranking diário ou anúncio ativo ≥ €0,20."""
+    daily_names, _, _, market_items, _ = _get_daily_cached()
+    if not market_items:
         return []
     cands = []
     for sec in (build.get("sections") or []):
@@ -548,8 +556,12 @@ def itens_diarios_para_build(build: dict):
             if not base:
                 continue
             prefix = base + " ("
-            # todas variantes da base que estão no diário
-            matches = [(k, daily_map[k]) for k in daily_map if k.startswith(prefix)]
+            matches = [
+                (market_name, item)
+                for market_name, item in market_items.items()
+                if market_name.startswith(prefix)
+                and (market_name in daily_names or _market_sell_price(item) >= BUILD_FARM_MIN_SELL)
+            ]
             if not matches:
                 continue
             best = max(matches, key=lambda kv: _hybrid_score(kv[1]))
@@ -569,15 +581,15 @@ def render_farm_para_build(build: dict, conta: str = None) -> str:
             if "|user=" in _u:
                 conta = _u.split("|user=", 1)[1].split("|", 1)[0].strip() or None
         except: conta = None
-    daily_names, _, rank, _ = _get_daily_cached()
+    daily_names, _, rank, _, _ = _get_daily_cached()
     cands = itens_diarios_para_build(build)
     if not cands:
         return (
             '<div class="farmBuild farmBuild-empty">'
-            '<div class="farmBuildHead">\U0001F33E FARM POSSÍVEL <span class="muted">só diários</span></div>'
-            '<p class="farmBuildHint muted">Nenhum gear desta build está entre os itens diários (top_hybrid/sweet/líquidos/baleias) hoje. '
-            'O gear é vendável noutros dias — foca <b>progressão/EXP/Ouro</b> por agora. '
-            f'União do dia: {len(daily_names)} itens únicos.</p>'
+            '<div class="farmBuildHead">\U0001F33E FARM POSSÍVEL <span class="muted">sem itens elegíveis</span></div>'
+            '<p class="farmBuildHint muted">Nenhum gear desta build está nos rankings diários ou tem anúncio ativo no Mercado ≥ €0,20. '
+            'Foca <b>progressão/EXP/Ouro</b> e tenta novamente quando os preços atualizarem. '
+            f'União do farm diário: {len(daily_names)} itens únicos.</p>'
             '</div>'
         )
     rows = ""
@@ -596,11 +608,12 @@ def render_farm_para_build(build: dict, conta: str = None) -> str:
         hybrid = _hybrid_score(v)
         sell_n = v.get("sell") or 0
         vol_n = v.get("vol") or 0
+        source_badge = '<span class="fbadge">FARM DO DIA</span>' if best_name in daily_names else '<span class="fbadge">≥ €0,20</span>'
         rows += (
             f'<tr data-sell="{sell_n}" data-vol="{vol_n}" data-lvl="{lvl_n}" data-hybrid="{hybrid:.2f}">'
             f'<td class="fb-slot"><span class="fb-hero">{_esc(hero)}</span> <span class="muted">{_esc(slot)}</span>'
             f'<br><span class="fb-base">{_esc(base)}</span></td>'
-            f'<td class="fname"><a href="{link}" target="_blank">{_esc(best_name)}</a> {gchip}</td>'
+            f'<td class="fname"><a href="{link}" target="_blank">{_esc(best_name)}</a> {gchip} {source_badge}</td>'
             f'<td class="fdropcol">{drop}</td>'
             f'<td class="fprice">{_fmt_eur(v.get("sell"))}</td>'
             f'<td class="fvol">{_vol_badge(v.get("vol") or 0)}</td>'
@@ -609,16 +622,18 @@ def render_farm_para_build(build: dict, conta: str = None) -> str:
             f'</tr>'
         )
     n = len(cands)
+    daily_count = sum(1 for candidate in cands if candidate[3] in daily_names)
+    alternative_count = n - daily_count
     return (
         '<div class="farmBuild" data-farmbuild="1">'
-        f'<div class="farmBuildHead">\U0001F33E FARM POSSÍVEL <span class="fbadge">{n} itens desta build no FARM DO DIA</span> <span class="muted" style="font-size:10.5px;font-weight:600">· dia:{len(daily_names)} un. diarios</span></div>'
-        '<p class="farmBuildHint">Só itens diários — <b>top_hybrid 36 + sweet 24 + líquidos 30 + baleias 24</b> (união). Ordenado por <b>€/tempo</b> (hybrid = preço × (log10(vol+1)+1)). A coluna <b>Dropa em</b> mostra <b>Ato 1-3 Normal/Pesadelo/Inferno/Tormento</b> + <b>Terras da Peste andar 1-20</b>.</p>'
+        f'<div class="farmBuildHead">\U0001F33E FARM POSSÍVEL <span class="fbadge">{n} itens elegíveis nesta build</span> <span class="muted" style="font-size:10.5px;font-weight:600">· {daily_count} do FARM DO DIA · {alternative_count} alternativas ≥ €0,20</span></div>'
+        '<p class="farmBuildHint">Junta os rankings do FARM DO DIA a peças desta build com anúncio ativo no Mercado ≥ <b>€0,20</b>. As alternativas de €0,20 são exclusivas desta lista das builds e <b>não entram na FARM OP do dashboard</b>. Ordenado por <b>€/tempo</b> (preço × (log10(vol+1)+1)); usa os filtros para comparar valor, volume e facilidade de drop.</p>'
         '<div class="farmFilters" role="toolbar" aria-label="Ordenar farm possível"><span style="font-size:11px;color:#a89878;font-weight:700;">Ordenar:</span>'
         '<button type="button" class="ffilt on" data-sort="equilibrio" onclick="farmSort(this)">⚖️ Equilíbrio</button>'
         '<button type="button" class="ffilt" data-sort="caros" onclick="farmSort(this)">💰 Mais caros</button>'
         '<button type="button" class="ffilt" data-sort="venda" onclick="farmSort(this)">💧 Mais fácil de vender</button>'
         '<button type="button" class="ffilt" data-sort="drop" onclick="farmSort(this)">🎯 Mais fácil de drop</button></div>'
-        f'<div class="ftablewrap fbwrap"><table class="ftable"><thead><tr><th>Peça (build)</th><th>Item diário (melhor variante)</th><th>Dropa em</th><th>Preço</th><th>Vol.24h</th><th>Mediana</th><th style="min-width:140px">Ações</th></tr></thead><tbody>{rows}</tbody></table></div>'
+        f'<div class="ftablewrap fbwrap"><table class="ftable"><thead><tr><th>Peça (build)</th><th>Item elegível (melhor variante)</th><th>Dropa em</th><th>Preço</th><th>Vol.24h</th><th>Mediana</th><th style="min-width:140px">Ações</th></tr></thead><tbody>{rows}</tbody></table></div>'
         '</div>'
     )
 
