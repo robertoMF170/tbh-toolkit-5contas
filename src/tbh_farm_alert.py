@@ -130,13 +130,16 @@ def _watch_data(path: str = WATCH_FILE) -> dict:
 
 def load_targets(path: str = WATCH_FILE) -> list[dict]:
     data = _watch_data(path)
-    return [
-        {"name": str(target.get("name") or "").strip(),
-         "conta": str(target.get("conta") or "").strip(),
-         "paused": bool(target.get("paused", False))}
-        for target in data["targets"]
-        if isinstance(target, dict) and str(target.get("name") or "").strip()
-    ]
+    targets = []
+    for target in data["targets"]:
+        name = str(target.get("name") or "").strip() if isinstance(target, dict) else ""
+        if not name:
+            continue
+        normalized = {"name": name, "conta": str(target.get("conta") or "").strip()}
+        if target.get("paused"):
+            normalized["paused"] = True
+        targets.append(normalized)
+    return targets
 
 
 def set_target_paused(name: str, conta: str = "", paused: bool = True,
@@ -351,6 +354,7 @@ def resolve_account_name(requested: str, accounts: list[dict]) -> str | None:
 
 def _accounts_for_targets(targets: list[dict], accounts: list[dict]) -> list[dict]:
     """Limit explicit-account alerts to those saves; unscoped alerts need all accounts."""
+    targets = [target for target in targets if not target.get("paused")]
     if not targets:
         return []
     if any(not str(target.get("conta") or "").strip() for target in targets):
@@ -808,12 +812,14 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
               inventory=None, notify=notify_drop, zone_reader=None,
               notify_zone=notify_zone_status) -> list[dict]:
     targets = load_targets(watch_file)
+    active_targets = [target for target in targets if not target.get("paused")]
     all_accounts = load_accounts(accounts_file)
+    if not active_targets:
+        return []
     if not all_accounts:
         print(f"[FARM] Ainda nao encontrei contas em {accounts_file}.", flush=True)
         return []
 
-    active_targets = [target for target in targets if not target.get("paused")]
     # Unscoped targets need all accounts to identify where a drop happened;
     # explicit-account targets read only their selected saves.
     accounts = _accounts_for_targets(active_targets, all_accounts)
@@ -1008,7 +1014,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                 if status_key in zone_keys_seen:
                     continue
                 zone_keys_seen.add(status_key)
-                if old_zone_statuses.get(status_key) == signature or _target_key(target) in pending_baselines:
+                if old_zone_statuses.get(status_key) == signature:
                     continue
                 zone_notifications.append({
                     "type": "zone_status",
@@ -1028,7 +1034,10 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         "zone_statuses": next_zone_statuses,
         "zone_unreadable": sorted(next_zone_unreadable),
     })
-    _clear_baseline_pending(watch_file, baselines_ready_to_clear)
+    try:
+        _clear_baseline_pending(watch_file, baselines_ready_to_clear)
+    except (OSError, ValueError) as exc:
+        print(f"[FARM] Nao consegui guardar a nova linha de base de um alvo retomado ({type(exc).__name__}); vou tentar novamente.", flush=True)
 
     for zone_alert in zone_notifications:
         notify_zone(zone_alert)
@@ -1165,9 +1174,10 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
         started = time.monotonic()
         try:
             targets = load_targets()
+            active_targets = [target for target in targets if not target.get("paused")]
             configured_accounts = load_accounts()
-            watched_accounts = _accounts_for_targets(targets, configured_accounts)
-            target_signature = tuple((t["name"], t.get("conta") or "") for t in targets)
+            watched_accounts = _accounts_for_targets(active_targets, configured_accounts)
+            target_signature = tuple((t["name"], t.get("conta") or "", bool(t.get("paused"))) for t in targets)
             if target_signature != last_signature:
                 last_signature = target_signature
                 _set_farm_window_title(targets)
@@ -1179,16 +1189,19 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
 
             # Sinaliza o arranque antes do primeiro scan, para o .bat confirmar que o
             # processo existe mesmo quando ainda nao ha alvos ou saves acessiveis.
-            _write_heartbeat(targets, configured_accounts, interval, status="scanning" if targets else "starting", watched_accounts=watched_accounts)
-            if targets:
+            initial_status = "scanning" if active_targets else ("paused" if targets else "starting")
+            _write_heartbeat(targets, configured_accounts, interval, status=initial_status, watched_accounts=watched_accounts)
+            if active_targets:
                 hits = poll_once()
+                targets = load_targets()
+                active_targets = [target for target in targets if not target.get("paused")]
                 configured_accounts = load_accounts()
-                watched_accounts = _accounts_for_targets(targets, configured_accounts)
+                watched_accounts = _accounts_for_targets(active_targets, configured_accounts)
                 if hits:
                     _print_watch_summary(targets, configured_accounts)
                 watched_names = {account["name"].casefold() for account in watched_accounts}
                 unreadable = len(watched_names & {name.casefold() for name in _LAST_SCAN_ERRORS})
-                unresolved = any(target.get("conta") and not resolve_account_name(target["conta"], configured_accounts) for target in targets)
+                unresolved = any(target.get("conta") and not resolve_account_name(target["conta"], configured_accounts) for target in active_targets)
                 if not configured_accounts:
                     status = "no_accounts"
                 elif unresolved or not watched_accounts:
@@ -1210,7 +1223,8 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
                     )
                     discord_label = "ativo" if discord_on else "desativado"
                     print(
-                        f"[FARM] Continua a vigiar: {len(targets)} alvo(s); "
+                        f"[FARM] Continua a vigiar: {len(active_targets)} alvo(s) ativos, "
+                        f"{len(targets) - len(active_targets)} em pausa; "
                         f"saves legiveis {good}/{len(watched_accounts)}; Discord {discord_label}. "
                         f"Le os saves a cada {interval:g}s; proximo resumo em "
                         f"{report_interval / 60:g} minuto(s).",
@@ -1219,7 +1233,7 @@ def watch(interval: float = 2.0, report_interval: float = 900.0) -> None:
                     last_report = now
             else:
                 _LAST_SCAN_ERRORS.clear()
-                status = "waiting_for_targets" if configured_accounts else "no_accounts"
+                status = "paused" if targets else ("waiting_for_targets" if configured_accounts else "no_accounts")
                 _write_heartbeat(targets, configured_accounts, interval, status=status, watched_accounts=watched_accounts)
                 now = time.monotonic()
                 if now - last_report >= report_interval:

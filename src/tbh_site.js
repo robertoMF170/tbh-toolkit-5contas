@@ -16,14 +16,15 @@ function farmApi(action,name,account){
 function syncFarmButtons(w){
   document.querySelectorAll('.ffarmbtn').forEach(function(button){
     var name=(button.getAttribute('data-farm')||'').trim().toLowerCase(),account=farmAccountForButton(button).trim().toLowerCase();
-    var active=(w.targets||[]).some(function(target){var targetName=String(target.name||'').trim().toLowerCase(),targetAccount=String(target.conta||'').trim().toLowerCase();return name===targetName&&(!targetAccount||!account||targetAccount===account||account.endsWith('('+targetAccount+')'));});
-    button.classList.toggle('on',active);button.textContent=active?'🔔 A vigiar':'🎯 Vigiar item';
-    button.title=active?'Este item esta na lista. Clica para deixar de vigiar.':'Adicionar este item a lista de alertas.';
+    var target=(w.targets||[]).find(function(target){var targetName=String(target.name||'').trim().toLowerCase(),targetAccount=String(target.conta||'').trim().toLowerCase();return name===targetName&&(!targetAccount||!account||targetAccount===account||account.endsWith('('+targetAccount+')'));});
+    var active=!!target,paused=active&&!!target.paused;
+    button.classList.toggle('on',active);button.textContent=paused?'⏸ Pausado':active?'🔔 A vigiar':'🎯 Vigiar item';
+    button.title=paused?'Este item esta em pausa. Usa Retomar ou Parar na lista de alertas.':active?'Este item esta na lista. Usa Parar na lista de alertas para o remover.':'Adicionar este item a lista de alertas.';
   });
 }
 function farmAction(action,name,account){
   var bar=document.getElementById('farmWatchBar');
-  if(bar){bar.classList.add('show');bar.textContent=action==='remove'?'A remover o alerta…':action==='ack'?'A confirmar o drop…':'A registar o item…';}
+  if(bar){bar.classList.add('show');bar.textContent=action==='remove'?'A remover o alerta…':action==='pause'?'A pausar o alerta…':action==='resume'?'A retomar o alerta…':action==='ack'?'A confirmar o drop…':'A registar o item…';}
   return farmApi(action,name,account).then(function(data){
     window.__FARM_WATCH__={targets:data.targets||[],hits:data.hits||[]};syncFarmButtons(window.__FARM_WATCH__);renderFarmWatchBar(window.__FARM_WATCH__);
     toast((data.message||'Lista de alertas atualizada.')+' — o run.bat mantem a vigia ativa.');return data;
@@ -40,16 +41,16 @@ function refreshFarmWatchBar(){
 }
 function renderFarmWatchBar(w){
   var bar=document.getElementById('farmWatchBar');if(!bar||!w)return;
-  var targets=w.targets||[],allHits=w.hits||[],pending=allHits.filter(function(hit){return !hit.acknowledged;});
+  var targets=w.targets||[],allHits=w.hits||[],pending=allHits.filter(function(hit){return !hit.acknowledged;}),activeCount=targets.filter(function(target){return !target.paused;}).length,pausedCount=targets.length-activeCount;
   if(!targets.length&&!pending.length){bar.classList.remove('show');bar.innerHTML='';return;}
-  var html='<h4>🎯 ALERTAS DE FARM — <span style="color:#7ee787">'+targets.length+' alvo(s)</span> · atualização automática</h4>';
+  var html='<h4>🎯 ALERTAS DE FARM — <span style="color:#7ee787">'+activeCount+' a vigiar</span>'+(pausedCount?' · <span style="color:#ffca73">'+pausedCount+' em pausa</span>':'')+' · atualização automática</h4>';
   if(targets.length){
     html+='<div class="fw-tags">';targets.forEach(function(target){
-      var name=String(target.name||'?'),account=String(target.conta||''),quantity=0;
+      var name=String(target.name||'?'),account=String(target.conta||''),quantity=0,paused=!!target.paused;
       allHits.forEach(function(hit){var wanted=account.trim().toLowerCase(),actual=String(hit.conta||'').trim().toLowerCase();if(String(hit.name||'').trim().toLowerCase()===name.trim().toLowerCase()&&(!wanted||actual===wanted||actual.endsWith('('+wanted+')')))quantity+=Math.max(0,parseInt(hit.qtd,10)||0);});
-      html+='<span class="fw-tag"><b>'+farmEscape(name)+'</b><span style="color:#a89878">'+farmEscape(account?' @ '+account:' @ todas')+' · '+quantity+' encontrada(s)</span><button type="button" data-farm-action="remove" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">Parar</button></span>';
+      html+='<span class="fw-tag"><b>'+farmEscape(name)+'</b><span style="color:#a89878">'+farmEscape(account?' @ '+account:' @ todas')+' · '+quantity+' encontrada(s)</span>'+(paused?'<span class="fw-paused">⏸ PAUSADO</span>':'')+'<button type="button" data-farm-action="'+(paused?'resume':'pause')+'" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">'+(paused?'▶ Retomar':'⏸ Pausar')+'</button><button type="button" data-farm-action="remove" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'" title="Parar remove este item da lista">Parar</button></span>';
     });html+='</div>';}
   pending.slice(-3).forEach(function(hit){var name=String(hit.name||'?'),account=String(hit.conta||'?');html+='<div class="fw-hit">🔔 <b>'+farmEscape(name)+'</b> @ '+farmEscape(account)+' ×'+(parseInt(hit.qtd,10)||1)+' — drop encontrado <button type="button" data-farm-action="ack" data-name="'+farmEscape(name)+'" data-conta="'+farmEscape(account)+'">✓ Confirmar</button></div>';});
-  html+='<div style="margin-top:6px;font-size:11px;color:#a89878">O run.bat consulta os saves a cada 2 segundos. Nao precisas de autorizar Python ou pop-ups no browser.</div>';
+  html+='<div style="margin-top:6px;font-size:11px;color:#a89878">Pausar mantém o item guardado sem gerar alertas; Retomar volta a vigiar. Parar remove o item da lista.</div>';
   bar.innerHTML=html;bar.querySelectorAll('[data-farm-action]').forEach(function(button){button.addEventListener('click',function(){button.disabled=true;farmAction(button.dataset.farmAction,button.dataset.name,button.dataset.conta).catch(function(){}).finally(function(){button.disabled=false;});});});bar.classList.add('show');
 }

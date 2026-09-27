@@ -216,7 +216,7 @@ def executar_acao_farm(pedido: dict) -> dict:
             raise RuntimeError("Nao foi possivel regenerar a dashboard.")
         return {"ok": True, "changed": True, "action": action,
                 "message": "Build adicionada. A dashboard vai ser atualizada agora."}
-    if action not in {"add", "remove", "ack", "status"}:
+    if action not in {"add", "remove", "pause", "resume", "ack", "status"}:
         raise ValueError("Acao de farm desconhecida.")
     if action != "status" and (not name or len(name) > 200 or len(account) > 120):
         raise ValueError("Nome do item ou conta invalido.")
@@ -232,6 +232,13 @@ def executar_acao_farm(pedido: dict) -> dict:
     elif action == "remove":
         changed = farm_alert.remove_target(name, account)
         message = ("Alerta removido: " if changed else "Esse alerta nao estava registado: ") + name
+    elif action in {"pause", "resume"}:
+        paused = action == "pause"
+        changed = farm_alert.set_target_paused(name, account, paused=paused)
+        if changed:
+            message = ("Alerta pausado: " if paused else "Alerta retomado: ") + name
+        else:
+            message = ("Esse alerta nao estava ativo: " if paused else "Esse alerta nao estava em pausa: ") + name
     else:
         changed = farm_alert.acknowledge_hits(name, conta=account) > 0
         message = ("Alerta confirmado: " if changed else "Nao havia alerta pendente para: ") + name
@@ -242,7 +249,7 @@ def executar_acao_farm(pedido: dict) -> dict:
         "changed": changed,
         "action": action,
         "message": message,
-        "targets": farm_alert.load_targets(),
+        "targets": farm_alert._public_targets(farm_alert.load_targets()),
         "hits": watch_data["hits"],
     }
 
@@ -377,7 +384,7 @@ class VisitasHandler(BaseHTTPRequestHandler):
             try:
                 import tbh_farm_alert as farm_alert
                 watch_data = farm_alert._watch_data()
-                self._json({"ok": True, "targets": farm_alert.load_targets(), "hits": watch_data["hits"]})
+                self._json({"ok": True, "targets": farm_alert._public_targets(farm_alert.load_targets()), "hits": watch_data["hits"]})
             except Exception:
                 self._json({"ok": False, "erro": "Nao foi possivel ler o estado dos alertas."}, 500)
         elif rota in ("/api/visitas", "/api/visitas/"):
