@@ -133,8 +133,7 @@ def load_targets(path: str = WATCH_FILE) -> list[dict]:
     return [
         {"name": str(target.get("name") or "").strip(),
          "conta": str(target.get("conta") or "").strip(),
-         "paused": bool(target.get("paused", False)),
-         "baseline_pending": bool(target.get("baseline_pending", False))}
+         "paused": bool(target.get("paused", False))}
         for target in data["targets"]
         if isinstance(target, dict) and str(target.get("name") or "").strip()
     ]
@@ -233,9 +232,8 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
     if selected_account:
         accounts = [account for account in accounts if account["name"] == selected_account]
 
-    # Try to snapshot current inventory to prevent false positives. A missing
-    # dependency/save must not prevent registering an alert: the watcher will
-    # retry and establish its first baseline once it can read that save.
+    # Snapshot current inventory to avoid false positives; if it fails, the
+    # watcher will retry and establish its first baseline on the first valid read.
     current, failed = {}, set()
     try:
         current, failed = scan_inventories(accounts, _market_names([{"name": name}], price_file), inventory)
@@ -247,15 +245,11 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
     for account in failed:
         if account.casefold() in folded_old:
             current[account] = folded_old[account.casefold()]
-    # Keep an explicit empty baseline for unreadable accounts. Otherwise poll_once
-    # could mistake an older global snapshot for the moment this target was added.
     baseline_accounts = {
         account.casefold(): _item_count(items, name)
         for account, items in readable_current.items()
     }
     if selected_account:
-        # Ignore snapshots from other accounts retained in old_state: this target
-        # must only compare against the account explicitly selected by the user.
         baseline_accounts = {
             account.casefold(): _item_count(items, name)
             for account, items in readable_current.items()
@@ -263,88 +257,23 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
         }
     old_baselines[_target_key({"name": name, "conta": conta})] = {"accounts": baseline_accounts}
     state.update({"version": 1, "accounts": {**old_accounts, **current}, "target_baselines": old_baselines})
-
     _write_json_atomic(state_file, state)
 
-    # Persist the watch request even if reading saves failed; the running monitor
-    # can retry as soon as the save becomes available or its lock is released.
     data["targets"].append({"name": name, "conta": conta})
     _write_json_atomic(watch_file, data)
     return True
 
 
-def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
-               state_file: str = STATE_FILE, accounts_file: str = ACCOUNTS_FILE,
-               price_file: str = PRICE_FILE, inventory=None) -> bool:
-    name = str(name or "").strip()
-    conta = str(conta or "").strip()
-    if not name:
-        return False
-    data = _watch_data(watch_file)
-    key = (name.casefold(), conta.casefold())
-    for target in data["targets"]:
-        if isinstance(target, dict) and (
-            str(target.get("name") or "").strip().casefold(),
-            str(target.get("conta") or "").strip().casefold(),
-        ) == key:
-            return False
-
-    state = _read_json(state_file, {})
-    if not isinstance(state, dict):
-        state = {}
-    old_accounts = state.get("accounts", {})
-    if not isinstance(old_accounts, dict):
-        old_accounts = {}
-    old_baselines = state.get("target_baselines", {})
-    if not isinstance(old_baselines, dict):
-        old_baselines = {}
-
-    accounts = load_accounts(accounts_file)
-    selected_account = resolve_account_name(conta, accounts) if conta else None
-    if conta and not selected_account:
-        configured = ", ".join(account["name"] for account in accounts) or "nenhuma conta configurada"
-        print(f"[FARM] AVISO: '{conta}' nao corresponde a uma conta unica. O alvo fica associado a esse nome e nao alertara ate a conta ser resolvida. Configuradas: {configured}.", flush=True)
-    if selected_account:
-        accounts = [account for account in accounts if account["name"] == selected_account]
-
-    # Try to snapshot current inventory to prevent false positives. A missing
-    # dependency/save must not prevent registering an alert: the watcher will
-    # retry and establish its first baseline once it can read that save.
-    current, failed = {}, set()
-    try:
-        current, failed = scan_inventories(accounts, _market_names([{"name": name}], price_file), inventory)
-    except (Exception, SystemExit) as exc:
-        failed = {account["name"] for account in accounts}
-        print(f"[FARM] Snapshot inicial indisponivel ({type(exc).__name__}: {exc}); alvo registado e o vigia vai tentar novamente.", flush=True)
-    readable_current = dict(current)
-    folded_old = {str(account).casefold(): items for account, items in old_accounts.items()}
-    for account in failed:
-        if account.casefold() in folded_old:
-            current[account] = folded_old[account.casefold()]
-    # Keep an explicit empty baseline for unreadable accounts. Otherwise poll_once
-    # could mistake an older global snapshot for the moment this target was added.
-    baseline_accounts = {
-        account.casefold(): _item_count(items, name)
-        for account, items in readable_current.items()
+def _target_pending_baselines(watch_file: str = WATCH_FILE) -> set[str]:
+    return {
+        _target_key({
+            "name": str(target.get("name") or "").strip(),
+            "conta": str(target.get("conta") or "").strip(),
+        })
+        for target in _watch_data(watch_file)["targets"]
+        if isinstance(target, dict) and target.get("baseline_pending") and not target.get("paused")
+        and str(target.get("name") or "").strip()
     }
-    if selected_account:
-        # Ignore snapshots from other accounts retained in old_state: this target
-        # must only compare against the account explicitly selected by the user.
-        baseline_accounts = {
-            account.casefold(): _item_count(items, name)
-            for account, items in readable_current.items()
-            if account.casefold() == selected_account.casefold()
-        }
-    old_baselines[_target_key({"name": name, "conta": conta})] = {"accounts": baseline_accounts}
-    state.update({"version": 1, "accounts": {**old_accounts, **current}, "target_baselines": old_baselines})
-
-    _write_json_atomic(state_file, state)
-
-    # Persist the watch request even if reading saves failed; the running monitor
-    # can retry as soon as the save becomes available or its lock is released.
-    data["targets"].append({"name": name, "conta": conta})
-    _write_json_atomic(watch_file, data)
-    return True
 
 
 def remove_target(name: str, conta: str = "", watch_file: str = WATCH_FILE) -> bool:
@@ -884,10 +813,11 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         print(f"[FARM] Ainda nao encontrei contas em {accounts_file}.", flush=True)
         return []
 
+    active_targets = [target for target in targets if not target.get("paused")]
     # Unscoped targets need all accounts to identify where a drop happened;
     # explicit-account targets read only their selected saves.
-    accounts = _accounts_for_targets(targets, all_accounts)
-    for target in targets:
+    accounts = _accounts_for_targets(active_targets, all_accounts)
+    for target in active_targets:
         if target.get("conta") and not resolve_account_name(target["conta"], all_accounts):
             print(f"[FARM] A conta do alvo '{target['name']}' ('{target.get('conta')}') nao corresponde a nenhuma conta em {accounts_file}.", flush=True)
 
@@ -908,7 +838,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
             inventory = None
     zone_snapshots = {}
     current, failed = scan_inventories(
-        accounts, _market_names(targets, price_file), inventory,
+        accounts, _market_names(active_targets, price_file), inventory,
         zone_snapshots=zone_snapshots,
     ) if accounts else ({}, set())
     if zone_reader is None and inventory is not None:
@@ -926,10 +856,17 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         if name.casefold() not in failed_accounts
     }
     accounts_by_fold = {name.casefold(): name for name in readable_current}
-    next_baselines = {}
+    paused_keys = {
+        _target_key(target) for target in targets if target.get("paused")
+    }
+    next_baselines = {
+        key: value for key, value in old_baselines.items() if key in paused_keys
+    }
+    pending_baselines = _target_pending_baselines(watch_file)
+    baselines_ready_to_clear = set()
     hits = []
     hit_keys = set()
-    for target in targets:
+    for target in active_targets:
         key = _target_key(target)
         old_target_state = old_baselines.get(key)
         old_counts = old_target_state.get("accounts", {}) if isinstance(old_target_state, dict) else {}
@@ -954,11 +891,31 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         else:
             account_names = list(readable_current)
 
+        target_pending = key in pending_baselines
+        expected_accounts = (
+            [resolve_account_name(target.get("conta"), all_accounts)]
+            if target.get("conta") else [account["name"] for account in accounts]
+        )
+        baseline_ready = bool(expected_accounts) and all(
+            account_name is not None and account_name.casefold() in accounts_by_fold
+            for account_name in expected_accounts
+        )
+        if target_pending and baseline_ready:
+            old_counts = {
+                account_name.casefold(): _item_count(readable_current[account_name], target["name"])
+                for account_name in expected_accounts
+            }
+            baselines_ready_to_clear.add(key)
+
         next_counts = dict(old_counts)
         for account_name in account_names:
             account_key = account_name.casefold()
             items = readable_current.get(account_name) or {}
             count = _item_count(items, target["name"])
+            if target_pending:
+                # Never alert while waiting for a fresh baseline after resume.
+                next_counts[account_key] = count
+                continue
             if account_key not in old_counts:
                 # This target/account pair was not observed before; start at today's count.
                 next_counts[account_key] = count
@@ -980,7 +937,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     if not isinstance(old_zone_unreadable, list):
         old_zone_unreadable = []
     active_zone_keys = set()
-    for target in targets:
+    for target in active_targets:
         requested_account = str(target.get("conta") or "").strip()
         if requested_account:
             resolved_account = resolve_account_name(requested_account, all_accounts)
@@ -1004,7 +961,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     zone_notifications = []
     zone_keys_seen = set()
     if callable(zone_reader) or zone_snapshots or failed_accounts:
-        for target in targets:
+        for target in active_targets:
             requested_account = str(target.get("conta") or "").strip()
             if requested_account:
                 resolved_account = resolve_account_name(requested_account, all_accounts)
@@ -1051,7 +1008,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                 if status_key in zone_keys_seen:
                     continue
                 zone_keys_seen.add(status_key)
-                if old_zone_statuses.get(status_key) == signature:
+                if old_zone_statuses.get(status_key) == signature or _target_key(target) in pending_baselines:
                     continue
                 zone_notifications.append({
                     "type": "zone_status",
@@ -1071,6 +1028,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         "zone_statuses": next_zone_statuses,
         "zone_unreadable": sorted(next_zone_unreadable),
     })
+    _clear_baseline_pending(watch_file, baselines_ready_to_clear)
 
     for zone_alert in zone_notifications:
         notify_zone(zone_alert)
