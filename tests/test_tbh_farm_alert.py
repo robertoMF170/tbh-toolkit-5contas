@@ -413,7 +413,7 @@ class TestAlertData(FarmAlertTestCase):
             self.assertTrue(alert.set_target_paused("Shadow Bow", "Conta 1", False, watch))
 
             raw = alert._read_json(watch, {})
-            self.assertTrue(raw["targets"][0]["baseline_pending"])
+            self.assertEqual(raw["targets"][0]["baseline_generation"], 1)
             self.assertEqual(raw["hits"], [old_hit])
             self.assertFalse(alert.set_target_paused("Shadow Bow", "Conta 1", False, watch))
 
@@ -434,8 +434,8 @@ class TestAlertData(FarmAlertTestCase):
             ]})
             write_json(prices, {"itens": {"Active Item": {"sell": 1}, "Paused Item": {"sell": 1}}})
             write_json(state, {"accounts": {}, "target_baselines": {
-                active_key: {"accounts": {"conta 1": 0}},
-                paused_key: {"accounts": {"conta 2": 4}},
+                active_key: {"accounts": {"conta 1": 0}, "baseline_generation": 0},
+                paused_key: {"accounts": {"conta 2": 4}, "baseline_generation": 0},
             }})
             inventory = TrackingFakeInventory()
             with (
@@ -487,8 +487,9 @@ class TestAlertData(FarmAlertTestCase):
                 ), [])
                 self.assertEqual(drops, [])
                 self.assertEqual(zones, [])
-                self.assertNotIn("baseline_pending", alert._read_json(watch, {})["targets"][0])
+                self.assertEqual(alert._read_json(state, {})["target_baselines"][target_key]["baseline_generation"], 1)
                 self.assertEqual(alert._read_json(state, {})["target_baselines"][target_key]["accounts"], {"conta 1": 4})
+            self.assertEqual(alert._read_json(state, {})["target_baselines"][target_key]["baseline_generation"], 1)
                 self.assertEqual(alert._read_json(watch, {})["hits"], [old_hit])
 
                 write_json(accounts, {"contas": [{
@@ -529,7 +530,7 @@ class TestAlertData(FarmAlertTestCase):
                     lambda _hit: self.fail("nao deve alertar enquanto o save nao esta legivel"),
                     zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
                 ), [])
-                self.assertTrue(alert._read_json(watch, {})["targets"][0]["baseline_pending"])
+                self.assertEqual(alert._read_json(watch, {})["targets"][0]["baseline_generation"], 1)
                 write_json(accounts, {"contas": [{
                     "nome": "Conta 1", "save": json.dumps({"Shadow Bow": 4})
                 }]})
@@ -538,7 +539,7 @@ class TestAlertData(FarmAlertTestCase):
                     lambda _hit: self.fail("nao deve alertar sobre itens ganhos durante a pausa"),
                     zone_reader=lambda _save: {}, notify_zone=lambda _alert: None,
                 ), [])
-                self.assertNotIn("baseline_pending", alert._read_json(watch, {})["targets"][0])
+                self.assertEqual(alert._read_json(state, {})["target_baselines"][target_key]["baseline_generation"], 1)
                 write_json(accounts, {"contas": [{
                     "nome": "Conta 1", "save": json.dumps({"Shadow Bow": 5})
                 }]})

@@ -138,6 +138,12 @@ def load_targets(path: str = WATCH_FILE) -> list[dict]:
         normalized = {"name": name, "conta": str(target.get("conta") or "").strip()}
         if target.get("paused"):
             normalized["paused"] = True
+        try:
+            baseline_generation = max(0, int(target.get("baseline_generation") or 0))
+        except (TypeError, ValueError):
+            baseline_generation = 0
+        if baseline_generation:
+            normalized["baseline_generation"] = baseline_generation
         targets.append(normalized)
     return targets
 
@@ -162,34 +168,19 @@ def set_target_paused(name: str, conta: str = "", paused: bool = True,
         if bool(target.get("paused", False)) == paused:
             return False
         target["paused"] = paused
-        if paused:
-            target.pop("baseline_pending", None)
-        else:
+        if not paused:
             # The first readable save after resuming becomes a fresh baseline;
-            # drops accumulated while paused are not reported retroactively.
-            target["baseline_pending"] = True
+            # the generation survives restarts without exposing it to the UI.
+            try:
+                generation = max(0, int(target.get("baseline_generation") or 0))
+            except (TypeError, ValueError):
+                generation = 0                target["baseline_generation"] = generation + 1
+            else:
+                target.pop("baseline_generation", None)
+
         _write_json_atomic(watch_file, data)
         return True
     return False
-
-
-def _clear_baseline_pending(watch_file: str, target_keys: set[str]) -> None:
-    """Clear resume markers only after the corresponding fresh baseline is saved."""
-    if not target_keys:
-        return
-    data = _watch_data(watch_file)
-    changed = False
-    for target in data["targets"]:
-        if not isinstance(target, dict) or target.get("paused") or not target.get("baseline_pending"):
-            continue
-        if _target_key({
-            "name": str(target.get("name") or "").strip(),
-            "conta": str(target.get("conta") or "").strip(),
-        }) in target_keys:
-            target.pop("baseline_pending", None)
-            changed = True
-    if changed:
-        _write_json_atomic(watch_file, data)
 
 
 def _public_targets(targets: list[dict]) -> list[dict]:
@@ -265,18 +256,6 @@ def add_target(name: str, conta: str = "", watch_file: str = WATCH_FILE,
     data["targets"].append({"name": name, "conta": conta})
     _write_json_atomic(watch_file, data)
     return True
-
-
-def _target_pending_baselines(watch_file: str = WATCH_FILE) -> set[str]:
-    return {
-        _target_key({
-            "name": str(target.get("name") or "").strip(),
-            "conta": str(target.get("conta") or "").strip(),
-        })
-        for target in _watch_data(watch_file)["targets"]
-        if isinstance(target, dict) and target.get("baseline_pending") and not target.get("paused")
-        and str(target.get("name") or "").strip()
-    }
 
 
 def remove_target(name: str, conta: str = "", watch_file: str = WATCH_FILE) -> bool:
@@ -868,8 +847,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
     next_baselines = {
         key: value for key, value in old_baselines.items() if key in paused_keys
     }
-    pending_baselines = _target_pending_baselines(watch_file)
-    baselines_ready_to_clear = set()
+    pending_baselines = set()
     hits = []
     hit_keys = set()
     for target in active_targets:
@@ -885,6 +863,14 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                 account.casefold(): _item_count(items or {}, target["name"])
                 for account, items in previous_accounts.items()
             }
+        try:
+            target_generation = max(0, int(target.get("baseline_generation") or 0))
+            baseline_generation = max(0, int((old_target_state or {}).get("baseline_generation") or 0))
+        except (TypeError, ValueError):
+            target_generation = baseline_generation = 0
+        target_pending = target_generation > baseline_generation
+        if target_pending:
+            pending_baselines.add(key)
 
         # New accounts enter the baseline at their first valid read, not as false drops.
         for account_name, items in readable_current.items():
@@ -897,7 +883,6 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         else:
             account_names = list(readable_current)
 
-        target_pending = key in pending_baselines
         expected_accounts = (
             [resolve_account_name(target.get("conta"), all_accounts)]
             if target.get("conta") else [account["name"] for account in accounts]
@@ -911,7 +896,7 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                 account_name.casefold(): _item_count(readable_current[account_name], target["name"])
                 for account_name in expected_accounts
             }
-            baselines_ready_to_clear.add(key)
+            baseline_generation = target_generation
 
         next_counts = dict(old_counts)
         for account_name in account_names:
@@ -934,7 +919,10 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
                     hit_keys.add(hit_key)
             # Track both gains and spending so only a later gain is a new drop.
             next_counts[account_key] = count
-        next_baselines[key] = {"accounts": next_counts}
+        next_baselines[key] = {
+            "accounts": next_counts,
+            "baseline_generation": baseline_generation,
+        }
 
     old_zone_statuses = old_state.get("zone_statuses", {})
     if not isinstance(old_zone_statuses, dict):
@@ -1034,20 +1022,29 @@ def poll_once(state_file: str = STATE_FILE, watch_file: str = WATCH_FILE,
         "zone_statuses": next_zone_statuses,
         "zone_unreadable": sorted(next_zone_unreadable),
     })
-    try:
-        _clear_baseline_pending(watch_file, baselines_ready_to_clear)
-    except (OSError, ValueError) as exc:
-        print(f"[FARM] Nao consegui guardar a nova linha de base de um alvo retomado ({type(exc).__name__}); vou tentar novamente.", flush=True)
-
     # A pause can arrive while this scan is running. Recheck persisted state
     # before sending so an in-flight scan cannot emit an alert after the click.
     latest_targets = load_targets(watch_file)
-    latest_pending = _target_pending_baselines(watch_file)
+    latest_generation = {
+        _target_key(target): max(0, int(target.get("baseline_generation") or 0))
+        for target in latest_targets
+    }
+    current_generations = {
+        _target_key(target): max(0, int(target.get("baseline_generation") or 0))
+        for target in targets
+    }
+    latest_state = _read_json(state_file, {})
+    latest_baselines = latest_state.get("target_baselines", {}) if isinstance(latest_state, dict) else {}
+    if not isinstance(latest_baselines, dict):
+        latest_baselines = {}
 
     def target_still_watched(event: dict) -> bool:
         return any(
             not target.get("paused")
-            and _target_key(target) not in latest_pending
+            and latest_generation.get(_target_key(target), 0) == current_generations.get(_target_key(target), 0)
+            and latest_generation.get(_target_key(target), 0) <= int(
+                (latest_baselines.get(_target_key(target), {}) or {}).get("baseline_generation") or 0
+            )
             and _hit_matches_target(event, target, all_accounts)
             for target in latest_targets
         )

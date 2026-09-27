@@ -278,6 +278,45 @@ class TestServidorHTTP(unittest.TestCase):
         self.assertEqual(disk_html, "window.__TBH_FARM_API_TOKEN__='__TBH_FARM_API_TOKEN_VALUE__';")
         self.assertNotIn(self.server.tbh_farm_token, disk_html)
 
+    def test_api_farm_get_expoe_estado_pausado(self):
+        with (
+            mock.patch("tbh_farm_alert.load_targets", return_value=[
+                {"name": "Item", "conta": "Conta 1", "paused": True},
+            ]),
+            mock.patch("tbh_farm_alert._watch_data", return_value={"targets": [], "hits": []}),
+        ):
+            with self._pedido("/api/farm", metodo="GET", headers=self._farm_headers(origin=self.base)) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(data["targets"], [{"name": "Item", "conta": "Conta 1", "paused": True}])
+
+    def test_executar_acao_farm_pausa_e_retomada_sem_remover_historico(self):
+        history = [{"name": "Item", "conta": "Conta 1", "qtd": 1, "acknowledged": True}]
+        with (
+            mock.patch("tbh_farm_alert.set_target_paused", return_value=True) as pause_target,
+            mock.patch("tbh_farm_alert._watch_data", return_value={"targets": [], "hits": history}),
+            mock.patch("tbh_farm_alert.load_targets", return_value=[
+                {"name": "Item", "conta": "Conta 1", "paused": True},
+            ]),
+        ):
+            paused = sv.executar_acao_farm({"action": "pause", "name": "Item", "conta": "Conta 1"})
+        self.assertTrue(paused["changed"])
+        self.assertEqual(paused["targets"], [{"name": "Item", "conta": "Conta 1", "paused": True}])
+        self.assertEqual(paused["hits"], history)
+        pause_target.assert_called_once_with("Item", "Conta 1", paused=True)
+
+        with (
+            mock.patch("tbh_farm_alert.set_target_paused", return_value=True) as resume_target,
+            mock.patch("tbh_farm_alert._watch_data", return_value={"targets": [], "hits": history}),
+            mock.patch("tbh_farm_alert.load_targets", return_value=[
+                {"name": "Item", "conta": "Conta 1"},
+            ]),
+        ):
+            resumed = sv.executar_acao_farm({"action": "resume", "name": "Item", "conta": "Conta 1"})
+        self.assertTrue(resumed["changed"])
+        self.assertEqual(resumed["targets"], [{"name": "Item", "conta": "Conta 1", "paused": False}])
+        self.assertEqual(resumed["hits"], history)
+        resume_target.assert_called_once_with("Item", "Conta 1", paused=False)
+
     def test_api_farm_get_exige_origem_local_e_token(self):
         code, body = self._pedido_erro("/api/farm", metodo="GET")
         self.assertEqual(code, 403)
@@ -290,6 +329,18 @@ class TestServidorHTTP(unittest.TestCase):
         ):
             with self._pedido("/api/farm", metodo="GET", headers=self._farm_headers(origin=self.base)) as resp:
                 self.assertEqual(json.loads(resp.read().decode("utf-8"))["targets"], [])
+
+    def test_api_farm_post_pausa_usa_a_acao_separada(self):
+        with mock.patch.object(sv, "executar_acao_farm", return_value={
+            "ok": True, "changed": True, "action": "pause", "message": "Alerta pausado: Item",
+            "targets": [{"name": "Item", "conta": "geek1781", "paused": True}], "hits": [],
+        }) as action:
+            with self._pedido("/api/farm", {"action": "pause", "name": "Item", "conta": "geek1781"},
+                              headers=self._farm_headers(origin=self.base)) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["targets"][0]["paused"])
+        action.assert_called_once_with({"action": "pause", "name": "Item", "conta": "geek1781"})
 
     def test_api_farm_post_regista_item_sem_protocolo_do_browser(self):
         with mock.patch.object(sv, "executar_acao_farm", return_value={
